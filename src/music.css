@@ -20,6 +20,9 @@ select { font: inherit; color: var(--theme-ink); background: var(--theme-field);
 .empty-library > button { display: flex; width: 300px; align-items: center; justify-content: space-between; padding: 16px 0; border-bottom: 1px solid var(--theme-ink); font-size: 24px; margin-bottom: 16px; }
 .empty-library small { display: block; color: var(--theme-muted); font-size: 14px; }
 .many-tracks { color: var(--theme-muted); font-size: 16px; letter-spacing: 2px; min-width: 130px; text-align: center; }
+.card-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 0 20px; }
+#card-style-toggle[aria-pressed="true"] { color: var(--theme-accent); border-color: currentColor; }
+:is([data-layout="compact"], [data-layout="portrait"]) .card-controls { gap: 0 12px; }
 .player-bar { position: fixed; z-index: 6; bottom: 0; inset-inline: 0; height: var(--player-height); display: flex; align-items: center; gap: 22px; padding: 16px max(28px, env(safe-area-inset-right)) 16px max(28px, env(safe-area-inset-left)); border-top: 1px solid var(--theme-line); background: var(--theme-paper, #eae5e1); color: var(--theme-ink, #080a08); }
 .now-playing { display: flex; gap: 15px; align-items: center; width: clamp(160px, 21vw, 330px); min-width: 0; text-align: left; }
 .mini-cover { width: 58px; height: 58px; flex: 0 0 58px; border: 1px solid var(--theme-line); display: grid; place-items: center; font-size: 35px; color: var(--theme-muted); background: var(--theme-field); }

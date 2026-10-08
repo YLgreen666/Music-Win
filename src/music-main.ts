@@ -136,6 +136,11 @@ function applyPreferences(immediate = false) {
   if (!scene) paintTheme(preferences.theme === 'dark' ? 1 : 0);
   const quality = normalizeQuality(preferences.rendering || qualityPresets[preferences.quality]);
   scene?.setMotion(preferences.reduced ? reducedMotion() : fullMotion()); scene?.setQuality(quality); scene?.setCardStyle(preferences.cardStyle === 'cover');
+  const cardToggle = $('#card-style-toggle');
+  cardToggle.textContent = preferences.cardStyle === 'cover' ? '封面已显示 ✓' : '显示封面';
+  cardToggle.setAttribute('aria-pressed', String(preferences.cardStyle === 'cover'));
+  cardToggle.title = preferences.cardStyle === 'cover' ? '切回原双环内构' : '在玻璃卡片内显示歌曲封面';
+  cardToggle.hidden = !scene;
   viewer?.setMotion(preferences.reduced ? reducedMotion() : fullMotion()); viewer?.setQuality(quality);
   configureAudio(); syncQualityUI(quality);
   titleRolling.update({ duration: preferences.reduced ? 0 : 460 }); artistRolling.update({ duration: preferences.reduced ? 0 : 460 });
@@ -337,6 +342,7 @@ async function runAction(button: HTMLElement) {
   if (action === 'import') { importModal(); return; }
   if (action === 'search') { searchModal(); return; }
   if (action === 'settings') { settingsModal(); return; }
+  if (action === 'card-style') { prefs().cardStyle = prefs().cardStyle === 'cover' ? 'original' : 'cover'; applyPreferences(); tell(prefs().cardStyle === 'cover' ? '已切换封面卡片' : '已切换原双环内构'); return; }
   if (action === 'playlists') { playlistsModal(); return; }
   if (action === 'queue') { queueModal(); return; }
   if (action === 'choose-files') { if (!(window as Window & { showOpenFilePicker?: unknown }).showOpenFilePicker) $('#file-input').click(); else { closeModal(); await library.chooseFiles(); } return; }

@@ -59,3 +59,5 @@
 新增 3 项测试覆盖封面尺寸/裁切、主色提取与透明像素、材质着色与原材质恢复。最终 `npm test` 21 项全部通过，TypeScript 检查与生产构建通过。构建 `index-BGN1CPoc.js` / 离线版本 `9eb3499df6cc9e2a`。
 
 内置 Chromium 使用开发专用 `verification/cover-review.html` 渲染实际场景和查看器，验证蓝色/暖色边框、亮暗主题、原内构恢复、查看器清晰/磨砂切换，无着色器错误。此页使用程序生成的 SVG 测试封面，不修改用户音乐库，不包含在生产离线缓存中。截图：`cover-blue.jpg`、`cover-warm-dark.jpg`、`cover-viewer-warm.jpg`。
+
+用户随后反馈仍看到双环模型：此前默认和已有外观设置仍为原内构，封面比例修订没有自动改变该设置。详情卡片旁新增“显示封面”按钮，复用设置中的同一外观状态，即时切换并持久化。生产构建 `index-WXW_q0kF.js` / 离线版本 `8e3dd1989f6d71c7` 通过；内置 Chromium 实测双向切换和刷新保存，390 × 844 下两个模型操作按钮位于屏幕内，无控制台错误。截图 `cover-toggle.jpg` 为现有测试库（白色测试封面），`cover-toggle-control.jpg` 展示新增入口。
