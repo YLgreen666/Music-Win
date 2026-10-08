@@ -22,6 +22,7 @@ import { configureInternalOptics } from "./internal-optics";
 import { DecryptionController } from "./decryption";
 import { fileLocation, records, musicTrack, archiveColumns, rowRebasePeriod } from "./data";
 import { MusicCoverLayer } from "./music/cover-layer";
+import { setCoverGroup, setCoverSurface, coverSurfaceState } from "./music/card-appearance";
 import type { Track } from "./music/types";
 import {
   cellKey,
@@ -223,6 +224,8 @@ export class ArchiveScene {
   private pendingPulse: ArchiveCell | null = null;
   private selectedSlot = 0;
   private covers?: MusicCoverLayer;
+  private borderColors?: THREE.InstancedBufferAttribute;
+  private borderUpdates?: InstanceUpdates;
   private coverStyle = false;
   private musicTrackForModel?: Track;
   setCardStyle(cover: boolean) {
@@ -230,7 +233,15 @@ export class ArchiveScene {
     const hide = musicInteriorSurfaces;
     for (const group of [this.model, ...this.outgoing.map(old => old.group)])
       for (const child of group.children) if (hide.has(child.userData.surface)) child.visible = !cover;
-    for (const mesh of this.instances) if (hide.has((mesh.material as THREE.Material).name.replace(/\.\d+$/, ''))) mesh.visible = !cover;
+    for (const mesh of this.instances) {
+      const material = mesh.material as THREE.MeshPhysicalMaterial, name = material.name.replace(/\.\d+$/, '');
+      if (hide.has(name)) mesh.visible = !cover;
+      if (this.covers) setCoverSurface(material, name, cover, this.covers.colorFor(), true);
+    }
+    if (this.covers) {
+      setCoverGroup(this.model, cover, this.covers.colorFor(this.musicTrackForModel));
+      for (const old of this.outgoing) setCoverGroup(old.group, cover, this.covers.colorFor(old.group.userData.musicTrack));
+    }
     this.renderState.invalidate();
   }
   refreshCatalog(index: number) {
@@ -495,6 +506,8 @@ export class ArchiveScene {
       this.appearance.register(name, mat, arrayMat);
       this.themeAttribute ??= new THREE.InstancedBufferAttribute(new Float32Array(count), 1).setUsage(THREE.DynamicDrawUsage);
       geom.setAttribute("archiveTheme", this.themeAttribute);
+      this.borderColors ??= new THREE.InstancedBufferAttribute(new Float32Array(count * 3), 3).setUsage(THREE.DynamicDrawUsage);
+      geom.setAttribute('musicBorderColor', this.borderColors);
       themeMaterial(arrayMat, name, true, this.subduedIndex);
       const inst = new THREE.InstancedMesh(geom, arrayMat, count);
       // All surfaces move rigidly together; share the transform buffer on the GPU.
@@ -595,11 +608,12 @@ export class ArchiveScene {
     if (this.coverStyle && this.covers) {
       for (const mesh of meshes) if (musicInteriorSurfaces.has(mesh.userData.surface)) mesh.visible = false;
       musicCover = await this.covers.viewerCover(this.musicTrackForModel);
+      setCoverGroup(model, true, musicCover.color);
       model.add(musicCover.mesh); meshes.push(musicCover.mesh);
     }
     return {
       model,
-      setClarity: (value: number) => this.appearance.setClarity(model, value),
+      setClarity: (value: number) => { this.appearance.setClarity(model, value); if (musicCover) setCoverGroup(model, true, musicCover.color); },
       dispose: () => {
         for (const mesh of meshes) {
           mesh.geometry.dispose();
@@ -859,6 +873,11 @@ export class ArchiveScene {
     this.themeAttribute = new THREE.InstancedBufferAttribute(new Float32Array(capacity), 1).setUsage(THREE.DynamicDrawUsage);
     if (previousTheme) this.themeAttribute.array.set(previousTheme.array);
     for (const inst of this.instances) inst.geometry.setAttribute("archiveTheme", this.themeAttribute);
+    const previousColors = this.borderColors;
+    this.borderColors = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 3), 3).setUsage(THREE.DynamicDrawUsage);
+    if (previousColors) this.borderColors.array.set(previousColors.array);
+    for (const inst of this.instances) inst.geometry.setAttribute('musicBorderColor', this.borderColors);
+    this.borderUpdates = new InstanceUpdates(this.borderColors);
     this.matrixUpdates = new InstanceUpdates(matrix);
     this.themeUpdates = new InstanceUpdates(this.themeAttribute);
     this.instanceCapacity = capacity;
@@ -1769,6 +1788,16 @@ export class ArchiveScene {
         covers.push({ matrix, track: musicTrack(fileAtCell(cell)) });
       }
       this.covers.update(covers, this.coverStyle);
+      setCoverGroup(this.model, this.coverStyle, this.covers.colorFor(this.musicTrackForModel));
+      for (const old of this.outgoing) setCoverGroup(old.group, this.coverStyle, this.covers.colorFor(old.group.userData.musicTrack));
+      if (this.coverStyle && this.borderColors) {
+        this.borderUpdates ??= new InstanceUpdates(this.borderColors);
+        for (const [index, cell] of this.drawnCells.entries()) {
+          const tint = this.covers.colorFor(musicTrack(fileAtCell(cell)));
+          this.borderUpdates.set(index * 3, [tint.r, tint.g, tint.b]);
+        }
+        this.borderUpdates.commit();
+      }
     }
     let neighborTop = -Infinity;
     const lane = selectedLane,
@@ -1842,8 +1871,10 @@ export class ArchiveScene {
           mat.attenuationColor?.r ?? 0, mat.attenuationColor?.g ?? 0, mat.attenuationColor?.b ?? 0);
         for (const name of ['appearance', 'glassClarity', 'themeAmount', 'subduedIndex'])
           state.floats(object.userData[name]?.value ?? 0);
+        const cover = coverSurfaceState(mat);
+        if (cover) state.floats(cover.enabled.value, cover.color.value.r, cover.color.value.g, cover.color.value.b);
         if (object instanceof THREE.InstancedMesh)
-          state.add(object.count, object.instanceMatrix.version, this.themeAttribute?.version ?? 0);
+          state.add(object.count, object.instanceMatrix.version, this.themeAttribute?.version ?? 0, this.borderColors?.version ?? 0);
       });
       if (!state.end()) { this.reusedFrames++; return; }
     }

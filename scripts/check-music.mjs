@@ -9,6 +9,43 @@ import { MusicDatabase } from '../src/music/database.ts';
 import { BrowserFileAccess } from '../src/music/file-access.ts';
 import { MusicLibrary } from '../src/music/library.ts';
 import { PageLifecycle } from '../src/music/lifecycle.ts';
+import { coverFrame, coverCrop, dominantCoverColor, placeholderColor } from '../src/music/cover-design.ts';
+import { setCoverSurface, coverSurfaceState } from '../src/music/card-appearance.ts';
+import * as THREE from 'three';
+
+test('cover frame leaves equal narrow margins and crops without stretching the source', () => {
+  assert.ok(Math.abs((5 - coverFrame.width) / 2 - .12) < 1e-6);
+  assert.ok(Math.abs((3.7 - coverFrame.height) / 2 - .12) < 1e-6);
+  for (const [width, height] of [[1000, 1000], [1600, 900], [500, 1200]]) {
+    const crop = coverCrop(width, height);
+    assert.ok(crop.x >= 0 && crop.y >= 0);
+    assert.ok(Math.abs(crop.width / crop.height - coverFrame.width / coverFrame.height) < 1e-6);
+    assert.ok(crop.width <= width && crop.height <= height);
+  }
+});
+
+test('cover color follows the dominant region and ignores transparent pixels', () => {
+  const pixels = [...Array(80).fill([35, 100, 190, 255]).flat(), ...Array(20).fill([220, 65, 45, 255]).flat(), ...Array(200).fill([255, 0, 0, 0]).flat()];
+  const blue = dominantCoverColor(pixels);
+  assert.ok(blue[2] > blue[1] && blue[1] > blue[0]);
+  assert.deepEqual(dominantCoverColor([0, 0, 0, 0]), placeholderColor);
+  assert.deepEqual(dominantCoverColor([255, 255, 255, 255]), [1, 1, 1]);
+});
+
+test('cover glass mode restores original properties and keeps per-instance tint shaders', () => {
+  const material = new THREE.MeshPhysicalMaterial({ transmission: .78, thickness: .12, roughness: .28, attenuationDistance: 2 });
+  const original = material.onBeforeCompile, tint = new THREE.Color('#3678bb');
+  setCoverSurface(material, 'Frosted_Polymer', false, tint, true); assert.equal(material.onBeforeCompile, original);
+  setCoverSurface(material, 'Frosted_Polymer', true, tint, true);
+  assert.equal(material.transmission, .975); assert.equal(material.thickness, .024);
+  const shader = { uniforms: {}, vertexShader: '#include <begin_vertex>', fragmentShader: '#include <metalnessmap_fragment>' };
+  material.onBeforeCompile(shader, {});
+  assert.match(shader.vertexShader, /attribute vec3 musicBorderColor/); assert.match(shader.fragmentShader, /vMusicBorderColor/);
+  setCoverSurface(material, 'Frosted_Polymer', false, tint, true);
+  assert.equal(material.transmission, .78); assert.equal(material.thickness, .12); assert.equal(material.roughness, .28); assert.equal(material.attenuationDistance, 2);
+  assert.equal(coverSurfaceState(material).enabled.value, 0);
+  material.dispose();
+});
 
 const track = (id, extra = {}) => ({ id, providerId: 'local', sourceId: id, title: id, artist: 'Test Artist', albumArtist: 'Test Artist', album: 'Album', trackNumber: 0, duration: 30, format: 'WAV', fileName: `${id}.wav`, folder: 'Music', size: 100, modified: 1, availability: 'ready', ...extra });
 test('IndexedDB restores tracks, covers, lyrics, playlists, root identities, queue and preferences', async () => {

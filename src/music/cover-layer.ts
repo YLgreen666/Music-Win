@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { Track } from './types.ts';
+import { coverFrame, coverCrop, dominantCoverColor, placeholderColor } from './cover-design';
 type CoverInstance = { matrix: THREE.Matrix4; track?: Track };
 async function decodeCover(blob: Blob): Promise<{ image: CanvasImageSource; width: number; height: number; close(): void }> {
   try { const bitmap = await createImageBitmap(blob); return { image: bitmap, width: bitmap.width, height: bitmap.height, close: () => bitmap.close() }; }
@@ -17,9 +18,11 @@ export class MusicCoverLayer {
   private texture: THREE.CanvasTexture;
   private slots = new Map<string, number>();
   private sources = new Map<string, Blob | undefined>();
+  private colors = new Map<string, THREE.Color>();
+  private fallbackColor = new THREE.Color().setRGB(...placeholderColor, THREE.SRGBColorSpace);
   private uvSlots: THREE.InstancedBufferAttribute;
   private ticket = 0;
-  private placement = new THREE.Matrix4().makeTranslation(0, 1.55, .12);
+  private placement = new THREE.Matrix4().makeTranslation(0, coverFrame.centerY, coverFrame.depth);
   private matrix = new THREE.Matrix4();
   private capacity = 512;
   constructor() {
@@ -27,7 +30,7 @@ export class MusicCoverLayer {
     this.texture = new THREE.CanvasTexture(this.canvas); this.texture.colorSpace = THREE.SRGBColorSpace; this.texture.anisotropy = 4;
     for (let slot = 0; slot < 64; slot++) this.placeholder(slot);
     this.uvSlots = new THREE.InstancedBufferAttribute(new Float32Array(this.capacity), 1);
-    const geometry = new THREE.PlaneGeometry(2.55, 2.55); geometry.setAttribute('musicSlot', this.uvSlots);
+    const geometry = new THREE.PlaneGeometry(coverFrame.width, coverFrame.height); geometry.setAttribute('musicSlot', this.uvSlots);
     const material = new THREE.MeshBasicMaterial({ map: this.texture, side: THREE.DoubleSide, toneMapped: false });
     material.onBeforeCompile = shader => {
       shader.vertexShader = 'attribute float musicSlot;\nvarying float vMusicSlot;\n' + shader.vertexShader;
@@ -53,21 +56,25 @@ export class MusicCoverLayer {
     this.texture.needsUpdate = true;
   }
   private async paint(track: Track, slot: number) {
+    this.colors.set(track.id, this.fallbackColor);
     this.placeholder(slot, track.title); if (!track.cover) return;
     const ticket = this.ticket;
     try {
       const bitmap = await decodeCover(track.cover);
       if (ticket !== this.ticket || this.slots.get(track.id) !== slot || this.sources.get(track.id) !== track.cover) { bitmap.close(); return; }
-      const size = Math.min(bitmap.width, bitmap.height);
-      this.canvas.getContext('2d')!.drawImage(bitmap.image, (bitmap.width - size) / 2, (bitmap.height - size) / 2, size, size, slot % 8 * 256, Math.floor(slot / 8) * 256, 256, 256);
-      bitmap.close(); this.texture.needsUpdate = true;
+      try {
+        const crop = coverCrop(bitmap.width, bitmap.height);
+        this.canvas.getContext('2d')!.drawImage(bitmap.image, crop.x, crop.y, crop.width, crop.height, slot % 8 * 256, Math.floor(slot / 8) * 256, 256, 256);
+        this.colors.set(track.id, this.sampleColor(this.canvas, slot % 8 * 256, Math.floor(slot / 8) * 256, 256));
+        this.texture.needsUpdate = true;
+      } finally { bitmap.close(); }
     } catch { /* A damaged cover keeps its placeholder. */ }
   }
   update(instances: CoverInstance[], enabled: boolean) {
     this.mesh.visible = enabled; if (!enabled) { this.mesh.count = 0; return; }
     const desired = new Map<string, Track>();
     for (const instance of instances) if (instance.track && desired.size < 63) desired.set(instance.track.id, instance.track);
-    for (const id of this.slots.keys()) if (!desired.has(id)) { this.slots.delete(id); this.sources.delete(id); }
+    for (const id of this.slots.keys()) if (!desired.has(id)) { this.slots.delete(id); this.sources.delete(id); this.colors.delete(id); }
     const used = new Set(this.slots.values());
     for (const [id, track] of desired) {
       if (!this.slots.has(id)) { let slot = 1; while (used.has(slot)) slot++; this.slots.set(id, slot); used.add(slot); }
@@ -93,11 +100,22 @@ export class MusicCoverLayer {
     const canvas = document.createElement('canvas'); canvas.width = canvas.height = 512;
     const context = canvas.getContext('2d')!; context.fillStyle = '#d8d0c4'; context.fillRect(0, 0, 512, 512);
     context.fillStyle = '#6b6051'; context.font = '32px MiSans'; context.textAlign = 'center'; context.fillText(track?.title || 'RHINE LAB', 256, 270, 460);
-    if (track?.cover) try { const bitmap = await decodeCover(track.cover); const size = Math.min(bitmap.width, bitmap.height); context.drawImage(bitmap.image, (bitmap.width - size) / 2, (bitmap.height - size) / 2, size, size, 0, 0, 512, 512); bitmap.close(); } catch { /* placeholder */ }
+    if (track?.cover) try {
+      const bitmap = await decodeCover(track.cover);
+      try { const crop = coverCrop(bitmap.width, bitmap.height); context.drawImage(bitmap.image, crop.x, crop.y, crop.width, crop.height, 0, 0, 512, 512); }
+      finally { bitmap.close(); }
+    } catch { /* placeholder */ }
     const texture = new THREE.CanvasTexture(canvas); texture.colorSpace = THREE.SRGBColorSpace;
-    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(2.55, 2.55), new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide, toneMapped: false }));
-    mesh.position.set(0, 1.55, .12); mesh.userData.assemblyPart = 'optical-core'; mesh.userData.surface = 'Music_Cover';
-    return { mesh, texture };
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(coverFrame.width, coverFrame.height), new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide, toneMapped: false }));
+    mesh.position.set(0, coverFrame.centerY, coverFrame.depth); mesh.userData.assemblyPart = 'optical-core'; mesh.userData.surface = 'Music_Cover';
+    return { mesh, texture, color: track?.cover ? this.sampleColor(canvas, 0, 0, 512) : this.fallbackColor };
   }
-  dispose() { this.ticket++; this.slots.clear(); this.sources.clear(); this.texture.dispose(); this.mesh.geometry.dispose(); (this.mesh.material as THREE.Material).dispose(); }
+  colorFor(track?: Track) { return track ? this.colors.get(track.id) ?? this.fallbackColor : this.fallbackColor; }
+  private sampleColor(image: CanvasImageSource, x: number, y: number, size: number) {
+    const sample = document.createElement('canvas'); sample.width = sample.height = 32;
+    const context = sample.getContext('2d', { willReadFrequently: true })!;
+    context.drawImage(image, x, y, size, size, 0, 0, 32, 32);
+    return new THREE.Color().setRGB(...dominantCoverColor(context.getImageData(0, 0, 32, 32).data), THREE.SRGBColorSpace);
+  }
+  dispose() { this.ticket++; this.slots.clear(); this.sources.clear(); this.colors.clear(); this.texture.dispose(); this.mesh.dispose(); this.mesh.geometry.dispose(); (this.mesh.material as THREE.Material).dispose(); }
 }
