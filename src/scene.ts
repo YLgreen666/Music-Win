@@ -20,7 +20,9 @@ import { applyTextureQuality, resizeQuality } from "./quality-renderer";
 import { CardAppearance } from "./appearance";
 import { configureInternalOptics } from "./internal-optics";
 import { DecryptionController } from "./decryption";
-import { fileAtSlot, fileLocation } from "./data";
+import { fileLocation, records, musicTrack, archiveColumns, rowRebasePeriod } from "./data";
+import { MusicCoverLayer } from "./music/cover-layer";
+import type { Track } from "./music/types";
 import {
   cellKey,
   sameCell,
@@ -57,7 +59,9 @@ const ease = (t: number) => {
   t = THREE.MathUtils.clamp(t, 0, 1);
   return t * t * t * (t * (t * 6 - 15) + 10);
 };
+const musicInteriorSurfaces = new Set(['Internal_Ceramic', 'Subsurface_Optics', 'Optical_Edges', 'Optical_Diffuser', 'Optical_Film_Edge', 'Optical_Film', 'Amber_Optical_Inlay']);
 export class ArchiveScene {
+  private disposed = false;
   private inputEvents = new AbortController();
   private presence = 1;
   private presenceTarget = 1;
@@ -73,8 +77,11 @@ export class ArchiveScene {
   }
   revealImmediately() { this.reveal = this.targetReveal; }
   dispose() {
+    if (this.disposed) return;
+    this.disposed = true; this.loaded = false;
     this.inputEvents.abort();
     this.cancelPointer();
+    if (this.covers) { this.scene.remove(this.covers.mesh); this.covers.dispose(); this.covers = undefined; }
     disposeThreeTree(this.scene);
     this.appearance.disposeSources();
     this.model.clear();
@@ -214,7 +221,26 @@ export class ArchiveScene {
   }[] = [];
   private pulses: { row: number; lane: number; time: number }[] = [];
   private pendingPulse: ArchiveCell | null = null;
-  private selectedSlot = 76;
+  private selectedSlot = 0;
+  private covers?: MusicCoverLayer;
+  private coverStyle = false;
+  private musicTrackForModel?: Track;
+  setCardStyle(cover: boolean) {
+    this.coverStyle = cover;
+    const hide = musicInteriorSurfaces;
+    for (const group of [this.model, ...this.outgoing.map(old => old.group)])
+      for (const child of group.children) if (hide.has(child.userData.surface)) child.visible = !cover;
+    for (const mesh of this.instances) if (hide.has((mesh.material as THREE.Material).name.replace(/\.\d+$/, ''))) mesh.visible = !cover;
+    this.renderState.invalidate();
+  }
+  refreshCatalog(index: number) {
+    this.cancelPointer(); this.setHover(null);
+    for (const old of this.outgoing) { this.scene.remove(old.group); this.appearance.dispose(old.group); }
+    this.outgoing = []; this.pulses = []; this.coordinateOrigin = { lane: 0, row: 0 };
+    const location = fileLocation(index); this.selectedCell = { lane: location.lane, row: location.row };
+    this.selectedSlot = index; this.musicTrackForModel = musicTrack(index); this.drawLabel(index);
+    this.setCardStyle(this.coverStyle); this.renderState.invalidate();
+  }
   private detail = 0;
   private targetDetail = 0;
   private reveal = 0;
@@ -341,9 +367,11 @@ export class ArchiveScene {
   async load(assetUrl = publicAsset("assets/archive-cassette.glb")) {
     this.labelMark.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(labelMarkSvg)}`;
     await this.labelMark.decode();
+    if (this.disposed) return;
     const gltf = await new GLTFLoader().loadAsync(
       assetUrl,
     );
+    if (this.disposed) { disposeThreeTree(gltf.scene); return; }
     gltf.scene.updateMatrixWorld(true);
     const meshes: THREE.Mesh[] = [];
     gltf.scene.traverse((o) => {
@@ -500,12 +528,14 @@ export class ArchiveScene {
     this.appearance.apply(this.model, 0);
     this.drawLabel(0);
     this.scene.add(this.model);
-    this.model.position.copy(this.cellPosition(poolCell(this.selectedSlot)));
+    this.model.position.copy(this.cellPosition(this.selectedCell));
+    this.covers = new MusicCoverLayer(); this.scene.add(this.covers.mesh);
     this.loaded = true;
   }
 
   private assemblyTemplate?: Promise<THREE.Group>;
   async createAssemblyModel() {
+    if (this.disposed) throw new Error('场景已关闭');
     this.assemblyTemplate ??= new GLTFLoader()
       .loadAsync(publicAsset("assets/archive-assembly.glb"))
       .then((gltf) => {
@@ -517,6 +547,7 @@ export class ArchiveScene {
         throw error;
       });
     const template = await this.assemblyTemplate;
+    if (this.disposed) throw new Error('场景已关闭');
     const model = new THREE.Group();
     const meshes: THREE.Mesh[] = [];
     template.traverse((object) => {
@@ -560,6 +591,12 @@ export class ArchiveScene {
     label.userData.themeAmount.value = this.themeAmount;
     model.add(label);
     meshes.push(label);
+    let musicCover: Awaited<ReturnType<MusicCoverLayer['viewerCover']>> | undefined;
+    if (this.coverStyle && this.covers) {
+      for (const mesh of meshes) if (musicInteriorSurfaces.has(mesh.userData.surface)) mesh.visible = false;
+      musicCover = await this.covers.viewerCover(this.musicTrackForModel);
+      model.add(musicCover.mesh); meshes.push(musicCover.mesh);
+    }
     return {
       model,
       setClarity: (value: number) => this.appearance.setClarity(model, value),
@@ -569,6 +606,7 @@ export class ArchiveScene {
           (mesh.material as THREE.Material).dispose();
         }
         texture.dispose();
+        musicCover?.texture.dispose();
       },
     };
   }
@@ -581,7 +619,7 @@ export class ArchiveScene {
     if (mode !== "archive") this.pendingPulse = null;
     this.looping = mode !== "hidden";
     if (!this.looping) {
-      const canonical = fileLocation(fileAtSlot(this.selectedSlot));
+      const canonical = fileLocation(this.selectedSlot);
       this.selectedCell = { lane: canonical.lane, row: canonical.row };
       this.coordinateOrigin = { lane: 0, row: 0 };
       for (const old of this.outgoing) {
@@ -673,14 +711,15 @@ export class ArchiveScene {
   private rebaseCoordinates() {
     // Periodically reduce the logical coordinates while preserving every
     // relative position, spring velocity, ripple and idle phase.
+    const period = rowRebasePeriod();
     const shift = {
       lane:
         Math.abs(this.selectedCell.lane) > 2048
-          ? Math.round((this.selectedCell.lane - 2) / 5) * 5
+          ? Math.round(this.selectedCell.lane / archiveColumns.length) * archiveColumns.length
           : 0,
       row:
-        Math.abs(this.selectedCell.row) > 2048
-          ? Math.floor((this.selectedCell.row - 12) / 8) * 8
+        Number.isFinite(period) && Math.abs(this.selectedCell.row) > Math.max(2048, period * 2)
+          ? Math.floor((this.selectedCell.row - 12) / period) * period
           : 0,
     };
     if (!shift.lane && !shift.row) return;
@@ -719,6 +758,7 @@ export class ArchiveScene {
     const changed = !sameCell(cell, this.selectedCell);
     if (this.looping && changed && this.loaded && this.lift.value > 0.0001) {
       const group = this.model.clone(true);
+      group.userData.musicTrack = this.musicTrackForModel;
       const label = group.children[group.children.length - 1] as THREE.Mesh;
       const canvas = document.createElement("canvas");
       canvas.width = 1024;
@@ -751,6 +791,7 @@ export class ArchiveScene {
       this.lift.velocity = 0;
     }
     this.selectedSlot = next;
+    this.musicTrackForModel = musicTrack(index);
     this.selectedCell = cell;
     if (changed) {
       this.decryption.select();
@@ -773,6 +814,7 @@ export class ArchiveScene {
     } else this.emitPulse(cell);
     this.targetRotation = 0;
     this.drawLabel(index);
+    this.setCardStyle(this.coverStyle);
   }
   private emitPulse(cell: ArchiveCell) {
     this.pulses.push({ ...cell, time: this.clock });
@@ -787,10 +829,10 @@ export class ArchiveScene {
     c.fillRect(12, 12, 1000, 6);
     c.fillRect(12, 419, 1000, 3);
     c.font = "bold 81px MiSans";
-    c.fillText("RHINE LAB, LLC.", 22, 116);
+    c.fillText(records[index]?.title || "RHINE LAB, LLC.", 22, 116, 740);
     c.font = "32px MiSans";
     c.fillStyle = "#878476";
-    c.fillText("INTERNAL DATABASE", 25, 174);
+    c.fillText(musicTrack(index)?.artist || "INTERNAL DATABASE", 25, 174, 735);
     c.fillStyle = "#171713";
     c.font = "bold 130px MiSans";
     c.fillText("NO." + String(index + 1).padStart(3, "0"), 22, 360);
@@ -1208,7 +1250,7 @@ export class ArchiveScene {
     const dt = Math.min(elapsed, 0.05);
     this.last = time;
     this.clock = time;
-    if (!this.loaded) return;
+    if (this.disposed || !this.loaded) return;
     this.flushHover();
     const step = !this.motion.surfaceTransitions ? 1 : Math.min(elapsed, .25) / 1.1;
     this.presence += Math.sign(this.presenceTarget - this.presence) * Math.min(step, Math.abs(this.presenceTarget - this.presence));
@@ -1718,6 +1760,16 @@ export class ArchiveScene {
     // renderer culling and do not need an O(n) bound recomputation each frame.
     if (matricesChanged || countChanged || !this.instances[0].boundingSphere) this.instances[0].computeBoundingSphere();
     this.themeUpdates?.commit();
+    if (this.covers) {
+      this.model.updateMatrixWorld(true);
+      const covers = [{ matrix: this.model.matrixWorld.clone(), track: this.musicTrackForModel }];
+      for (const old of this.outgoing) { old.group.updateMatrixWorld(true); covers.push({ matrix: old.group.matrixWorld.clone(), track: old.group.userData.musicTrack }); }
+      if (this.coverStyle) for (const [index, cell] of this.drawnCells.entries()) {
+        const matrix = new THREE.Matrix4().fromArray(this.instances[0].instanceMatrix.array, index * 16);
+        covers.push({ matrix, track: musicTrack(fileAtCell(cell)) });
+      }
+      this.covers.update(covers, this.coverStyle);
+    }
     let neighborTop = -Infinity;
     const lane = selectedLane,
       row = selectedRow;
@@ -1865,7 +1917,7 @@ export class ArchiveScene {
       pulses: this.pulses.map((pulse) => ({ ...pulse })),
       referenceTime: Math.round((this.scanTime + 5) * 100) / 100,
       selectedSlot: this.selectedSlot,
-      selectedLane: Math.floor(this.selectedSlot / 32),
+      selectedLane: fileLocation(this.selectedSlot).lane,
       selectedCell: { ...this.selectedCell },
       hoverCell: this.hoverCell ? { ...this.hoverCell } : null,
       hoverLifts: Object.fromEntries(this.hoverLifts),

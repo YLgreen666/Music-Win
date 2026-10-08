@@ -1,4 +1,5 @@
 node_modules/
+.cache/
 backups/
 dist/
 .tools/

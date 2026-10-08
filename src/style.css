@@ -1644,7 +1644,7 @@ button {
 [data-boot="array"] .file-title {
   font-size: 24px;
 }
-[data-boot="array"][data-mode="boot"] .file-title span {
+[data-boot="array"][data-mode="boot"] .file-title > span:not(#selected-title) {
   display: none;
 }
 [data-boot="array"] .callout-rule {

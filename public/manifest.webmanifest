@@ -2,7 +2,7 @@
   "id": "./",
   "name": "Rhine Lab · Analysis OS",
   "short_name": "Rhine Lab",
-  "description": "莱茵生命交互式三维研究档案终端",
+  "description": "莱茵生命三维玻璃音乐库与本地播放器",
   "lang": "zh-CN",
   "start_url": "./?source=pwa",
   "scope": "./",

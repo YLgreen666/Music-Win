@@ -7,6 +7,6 @@
 
 ## 逐字输入短音
 
-`typing-preview.wav` 及 `src/typing-samples.ts` 使用用户提供的《明日方舟》特别映像 [莱茵生命：访问] 中约 6.864–6.986 秒的三个短音，各 38ms。`typing-source.json` 保留精确时间、源文件校验与处理参数。原音及其衍生片段的权利归原作者，不纳入上文原创配乐的 MIT 授权声明。
+音乐播放器版本的逐字输入音效由 Web Audio 振荡器和滤波噪声生成，不再使用上游视频采样。`typing-source.json` 与提取脚本仅保留历史来源说明；采样音频及其编码模块已移除。背景配乐默认关闭，交互音效独立控制。
 
 提取脚本：`scripts/extract-typing-audio.mjs`。原片短音仅去直流、做边缘淡变和统一增益，没有变调、变速或合成替换。`reference/typing-original.wav` 为本地对照片段，不属于生产配乐。

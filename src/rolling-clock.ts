@@ -12,7 +12,7 @@ export function createRollingClock(element: HTMLElement) {
       locales: "en-GB", format: { minimumIntegerDigits: 2, useGrouping: false }, animated: false });
   });
   let initialized = false;
-  return (date: Date, animated: boolean) => {
+  const update = (date: Date, animated: boolean) => {
     const values = [date.getHours(), date.getMinutes(), date.getSeconds()];
     element.setAttribute("aria-label", values.map(n => String(n).padStart(2, "0")).join(":"));
     numbers.forEach((controller, index) => {
@@ -21,4 +21,5 @@ export function createRollingClock(element: HTMLElement) {
     });
     initialized = true;
   };
+  return Object.assign(update, { dispose: () => numbers.forEach(controller => controller.destroy()) });
 }

@@ -1,5 +1,4 @@
 import { hasTypingBetween } from "./typing-rhythm";
-import { TYPING_PCM, TYPING_SAMPLE_RATE } from "./typing-samples";
 import { assetUrl } from "./asset-url";
 export type Sound =
   | "page-open"
@@ -29,31 +28,6 @@ export type AudioPreferences = {
 const STEMS = ["atmosphere", "motif", "pulse"] as const;
 const LOOP_SECONDS = 160 / 3;
 const noiseBuffers = new WeakMap<BaseAudioContext, AudioBuffer>();
-const typingBuffers = new WeakMap<
-  BaseAudioContext,
-  { buffers: AudioBuffer[]; next: number }
->();
-function typingSample(c: BaseAudioContext) {
-  let bank = typingBuffers.get(c);
-  if (!bank) {
-    bank = {
-      buffers: TYPING_PCM.map((encoded) => {
-        const bytes = atob(encoded);
-        const buffer = c.createBuffer(1, bytes.length / 2, TYPING_SAMPLE_RATE);
-        const data = buffer.getChannelData(0);
-        for (let i = 0; i < data.length; i++) {
-          const word =
-            bytes.charCodeAt(i * 2) | (bytes.charCodeAt(i * 2 + 1) << 8);
-          data[i] = (word > 32767 ? word - 65536 : word) / 32768;
-        }
-        return buffer;
-      }),
-      next: 0,
-    };
-    typingBuffers.set(c, bank);
-  }
-  return bank.buffers[bank.next++ % bank.buffers.length];
-}
 const clamp = (x: number) =>
   Math.max(0, Math.min(1, Number.isFinite(x) ? x : 0));
 export const rampLevel = (
@@ -235,12 +209,11 @@ export function synthesizeSound(
       air(2100, 1300, 0.033, 0.064, 0, 0.005);
       tone(1050, 1050, 0.012, 0.06, 0, 0.005);
       break;
-    case "key": {
-      const source = c.createBufferSource();
-      source.buffer = typingSample(c);
-      connect(source, source, 0.2, 0, source.buffer.duration, 0, true);
+    case "key":
+      // Procedural terminal click; no original-PV audio samples are used.
+      tone(1380, 920, 0.022, 0.038, 0, 0.002);
+      air(2600, 1800, 0.009, 0.025, 0, 0.002);
       break;
-    }
     case "tick":
       glass(1680, 0.064, 0.24);
       break;
@@ -391,6 +364,7 @@ export class TerminalAudio {
     this.bootMix = -1;
   }
   private hide = () => {
+    if (this.disposed) return;
     this.requestId++;
     this.stopMusic();
     this.stopEffects();
@@ -398,6 +372,7 @@ export class TerminalAudio {
       this.context?.suspend().catch(() => {}) ?? Promise.resolve();
   };
   private visibility = () => {
+    if (this.disposed) return;
     this.bootTime = null;
     if (document.hidden) this.hide();
     else if (this.unlocked && !this.entryPending) void this.activate();
@@ -656,6 +631,7 @@ export class TerminalAudio {
     };
   }
   dispose() {
+    if (this.disposed) return;
     this.disposed = true;
     this.requestId++;
     this.stopMusic();
@@ -665,6 +641,6 @@ export class TerminalAudio {
     document.removeEventListener("visibilitychange", this.visibility);
     window.removeEventListener("pagehide", this.hide);
     window.removeEventListener("pageshow", this.visibility);
-    void this.context?.close();
+    if (this.context && this.context.state !== 'closed') void this.context.close().catch(() => {});
   }
 }

@@ -29,6 +29,7 @@ const PARTS = [
 
 type ModelSource = { model: THREE.Group; dispose: () => void; setClarity?: (value: number) => void };
 export class ModelViewer {
+  private disposed = false;
   private themeAmount = 0;
   setTheme(value: number) { this.themeAmount = value; }
   readonly root: HTMLElement;
@@ -38,8 +39,10 @@ export class ModelViewer {
   private quality = normalizeQuality(undefined);
   private superPerformance = false;
   dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
     this.request++;
-    if (this.isOpen) this.finishClose();
+    if (this.isOpen) this.finishClose(false);
     this.controls.dispose();
     disposeThreeTree(this.scene);
     for (const pass of this.pipeline.composer.passes) pass.dispose();
@@ -215,7 +218,7 @@ export class ModelViewer {
     provider: () => Promise<ModelSource>,
     reduced: boolean,
   ) {
-    if (this.isOpen) return;
+    if (this.disposed || this.isOpen) return;
     this.isOpen = true;
     this.closing = false;
     this.reduced = reduced;
@@ -390,7 +393,7 @@ export class ModelViewer {
       .catch(() => {});
   }
 
-  private finishClose() {
+  private finishClose(notify = true) {
     // Keep rendering and retain modal focus until the visible exit completes.
     this.isOpen = false;
     this.closing = false;
@@ -408,8 +411,7 @@ export class ModelViewer {
     this.groups.clear();
     this.siblings.forEach(({ node, inert }) => (node.inert = inert));
     this.siblings = [];
-    this.opener?.focus({ preventScroll: true });
-    this.onClose();
+    if (notify) { this.opener?.focus({ preventScroll: true }); this.onClose(); }
   }
 
   private setButtonsDisabled(disabled: boolean) {
