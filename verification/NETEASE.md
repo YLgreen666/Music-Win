@@ -29,3 +29,11 @@
 播放器真实浏览器回归：导入原创 `.cache/music-fixtures/track-1.wav` 与同名 LRC，metadata Worker 成功解析为「观测室 1 / Rhine Test」和 12 秒时长；播放按钮变为暂停，进度实际推进至 9 秒，进入三维详情时保持播放。没有导入第三方歌曲文件。
 
 布局检查：1920×1080 和 390×844；窄屏 modal 宽 366px、x=12px，高约 490px，文档无横向溢出。截图：`netease-desktop.png`、`netease-mobile.png`。检查后恢复默认浏览器视口。
+
+## 扫码连接错误诊断修订（2026-10-09）
+
+- 用户在普通 Edge 的测试站点上反馈二维码生成前报“无法连接”。对 `/login/qr/key` 与 `/login/qr/create` 逐一检查 OPTIONS/POST：预检均 204，POST 均 200，允许测试站点 Origin 和 Content-Type，Vary 为 Origin。原 JSON POST 的跨域配置在检查时有效。
+- 当前应用内浏览器直接打开 `/login/qr/key` 返回 `net::ERR_BLOCKED_BY_CLIENT`；播放器 fetch 也失败。这证明本地自动化浏览器的客户端拦截，但不能直接推定用户 Edge 的拦截原因。未尝试代理绕过浏览器的拦截；用户 Edge 的直接访问结果仍待反馈。
+- 移除仅用于缓存随机值的 `crypto.randomUUID` 依赖；只在 fetch 的 TypeError 时标记网络连接失败，准备请求失败、HTTP 错误和非 JSON 响应分别处理。原先整个请求中的 TypeError 都误归为“网络或跨域设置”。兼容性修订不代表已经定位用户浏览器的实际故障。
+- 扫码失败提供直接检查二维码接口的入口，仅包含公开路径、noCookie 和时间戳，不携带凭据。
+- `npm test` 30 项通过，TypeScript 和生产构建通过。真实浏览器核对新错误说明与检查链接，见 `netease-connection-diagnostic.png`。实际 Edge 扫码尚未确认恢复。

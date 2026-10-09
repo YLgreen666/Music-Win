@@ -7,6 +7,14 @@ export type NeteasePlaylist = { id: number; name: string; trackCount: number; cr
 type Session = { cookie: string; uid: number; nickname: string };
 type ApiBody = { code?: number; message?: string; msg?: string; [key: string]: unknown };
 type StorageLike = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
+export class NeteaseConnectionError extends Error {
+  readonly endpoint: string;
+  readonly path: string;
+  constructor(endpoint: string, path: string) {
+    super(`浏览器未收到网易云接口响应（${new URL(endpoint).hostname}）。请检查这个浏览器是否能直接打开接口；网络、浏览器拦截或跨域检查均可能导致此问题。`);
+    this.name = 'NeteaseConnectionError'; this.endpoint = endpoint; this.path = path;
+  }
+}
 export class NeteaseUnavailableError extends Error { constructor() { super('网易云暂无这首歌的可播放资源，可能已下架或受账号权限、地区限制。'); this.name = 'NeteaseUnavailableError'; } }
 export function secureMediaUrl(value?: string) {
   if (!value) return undefined;
@@ -30,6 +38,8 @@ export class NeteaseMusicProvider extends EventTarget implements MusicProvider {
   private closed = false;
   private coverActive = 0;
   private coverQueue: (() => void)[] = [];
+  private requestPrefix = Math.random().toString(36).slice(2);
+  private requestSequence = 0;
   private fetcher: typeof fetch;
   constructor(endpoint = NETEASE_API, fetcher: typeof fetch = fetch, storage?: StorageLike) {
     super(); this.fetcher = fetcher; this.endpoint = endpoint.replace(/\/$/, ''); this.storageKey = `rhine-netease-session:${this.endpoint}`;
@@ -46,15 +56,26 @@ export class NeteaseMusicProvider extends EventTarget implements MusicProvider {
     const revision = this.sessionRevision;
     try {
       // Cookie in POST body avoids credentials in URLs, history and server access logs.
-      const response = await this.fetcher(`${this.endpoint}${path}?timestamp=${Date.now()}&requestId=${crypto.randomUUID()}`, { method: 'POST', mode: 'cors', credentials: 'omit', cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...params, noCookie: true, ...(cookie ? { cookie } : {}) }), signal: controller.signal });
+      // This is a cache nonce, not a security token. Avoid requiring randomUUID
+      // on older browsers, where its TypeError used to look like a network failure.
+      const requestUrl = `${this.endpoint}${path}?timestamp=${Date.now()}&requestId=${this.requestPrefix}-${++this.requestSequence}`;
+      const bodyText = JSON.stringify({ ...params, noCookie: true, ...(cookie ? { cookie } : {}) });
+      let response: Response;
+      try {
+        response = await this.fetcher(requestUrl, { method: 'POST', mode: 'cors', credentials: 'omit', cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: bodyText, signal: controller.signal });
+      } catch (error) {
+        if (!controller.signal.aborted && error instanceof TypeError) throw new NeteaseConnectionError(this.endpoint, path);
+        throw error;
+      }
       if (!response.ok) throw new Error(`网易云接口暂不可用（HTTP ${response.status}）`);
-      const body = await response.json() as T;
+      let body: T;
+      try { body = await response.json() as T; }
+      catch (error) { if (!controller.signal.aborted && error instanceof SyntaxError) throw new Error('网易云接口返回了非 JSON 页面，可能是服务错误或访问验证。请直接打开接口检查。'); throw error; }
       if (body.code === 301) { if (revision === this.sessionRevision && this.session) this.disconnect(); throw new Error('网易云登录已失效，请重新扫码'); }
       if (body.code && body.code !== 200 && !(path === '/login/qr/check' && [800, 801, 802, 803].includes(body.code))) throw new Error('网易云接口未能完成请求，请稍后重试');
       return body;
     } catch (error) {
       if (controller.signal.aborted) throw controller.signal.reason || new DOMException('请求已取消', 'AbortError');
-      if (error instanceof TypeError) throw new Error('无法连接网易云接口，请检查网络或跨域设置');
       throw error;
     } finally { clearTimeout(timeout); signal?.removeEventListener('abort', abort); this.requests.delete(controller); }
   }

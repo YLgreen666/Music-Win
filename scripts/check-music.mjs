@@ -11,7 +11,7 @@ import { MusicLibrary } from '../src/music/library.ts';
 import { PageLifecycle } from '../src/music/lifecycle.ts';
 import { coverFrame, coverCrop, dominantCoverColor, placeholderColor } from '../src/music/cover-design.ts';
 import { setCoverSurface, coverSurfaceState } from '../src/music/card-appearance.ts';
-import { NeteaseMusicProvider, neteaseTrack, secureMediaUrl } from '../src/music/netease.ts';
+import { NeteaseMusicProvider, NeteaseConnectionError, neteaseTrack, secureMediaUrl } from '../src/music/netease.ts';
 import { MusicProviders } from '../src/music/providers.ts';
 import * as THREE from 'three';
 
@@ -153,6 +153,22 @@ test('online playback handles unavailable songs and trial permissions without pe
   const song = neteaseTrack(cloudSong(42)); await assert.rejects(provider.resolveMedia(song), /暂无/); assert.equal(song.playbackNotice, '暂无可播放资源');
   playable = true; const resource = await provider.resolveMedia(song); assert.equal(resource.crossOrigin, 'anonymous'); assert.match(resource.notice, /试听/); assert.equal(resource.url, 'https://m801.music.126.net/song.mp3'); assert.equal(song.url, undefined);
   provider.disconnect(); await assert.rejects(provider.resolveMedia(song), /扫码/); provider.dispose();
+});
+
+test('network rejection is distinct from request setup, HTTP failures and HTML responses', async () => {
+  const network = loggedProvider(async () => { throw new TypeError('Failed to fetch'); });
+  await assert.rejects(network.createQr(), error => error instanceof NeteaseConnectionError && error.path === '/login/qr/key' && !error.message.includes('test-session'));
+  const setup = { circular: null }; setup.circular = setup;
+  await assert.rejects(network.request('/login/qr/key', setup), error => error instanceof TypeError && !(error instanceof NeteaseConnectionError));
+  const http = new NeteaseMusicProvider('https://api.test', async () => new Response('', { status: 403 }), sessionStorageFake());
+  await assert.rejects(http.createQr(), /HTTP 403/);
+  const html = new NeteaseMusicProvider('https://api.test', async () => new Response('<html>verification</html>'), sessionStorageFake());
+  await assert.rejects(html.createQr(), /非 JSON/);
+  let uuidCalls = 0; const originalUuid = crypto.randomUUID;
+  crypto.randomUUID = () => { uuidCalls++; throw new TypeError('randomUUID unavailable'); };
+  const calls = [], compatible = new NeteaseMusicProvider('https://api.test', async url => { calls.push(url); return jsonResponse({ code: 200, data: { unikey: 'test' } }); }, sessionStorageFake());
+  try { await compatible.request('/login/qr/key'); await compatible.request('/login/qr/key'); assert.equal(uuidCalls, 0); assert.notEqual(calls[0], calls[1]); }
+  finally { crypto.randomUUID = originalUuid; for (const provider of [network, http, html, compatible]) provider.dispose(); }
 });
 
 test('late credential errors cannot disconnect a newly scanned account and requests are canceled on disposal', async () => {

@@ -3,6 +3,7 @@ import { formatTime } from './domain';
 import type { MusicLibrary } from './library';
 import type { MusicPlayer } from './player';
 import type { Track } from './types';
+import { NeteaseConnectionError } from './netease';
 type PanelHooks = { open(title: string, body: string): void; close(after?: () => void): void; show(id: string): void; tell(message: string): void; active(): boolean };
 
 /** Remote screens use the existing modal, focus handling and visual vocabulary. */
@@ -19,6 +20,11 @@ export class NeteasePanel {
   cancel() { ++this.generation; this.controller?.abort(); this.controller = undefined; clearTimeout(this.pollTimer); }
   private operation() { this.cancel(); this.controller = new AbortController(); return { signal: this.controller.signal, generation: this.generation }; }
   private current(generation: number) { return this.generation === generation && this.hooks.active(); }
+  private connectionHelp(error: unknown) {
+    if (!(error instanceof NeteaseConnectionError)) return '';
+    const url = new URL('/login/qr/key', this.library.netease.endpoint); url.searchParams.set('noCookie', 'true'); url.searchParams.set('timestamp', String(Date.now()));
+    return `<p class="help-note">二维码还未生成。可先在当前浏览器直接检查接口是否能打开，再返回重试。</p><p><a href="${esc(url.href)}" target="_blank" rel="noopener noreferrer">打开二维码接口检查 ↗</a></p>`;
+  }
   private header() {
     const account = this.library.netease.account;
     return `<div class="cloud-toolbar"><span>${account ? `已登录 · ${esc(account.nickname)}` : '尚未登录网易云'}</span><div><button data-action="cloud-login">${account ? '切换账号 / 扫码' : '扫码登录'}</button>${account ? '<button data-action="cloud-playlists">我的网易云歌单</button><button data-action="cloud-logout">退出连接</button>' : ''}</div></div><form id="cloud-search-form" class="search-field"><span>⌕</span><input name="query" id="cloud-query" aria-label="搜索网易云音乐" placeholder="搜索网易云歌曲、歌手" value="${esc(this.query)}" autocomplete="off" required maxlength="200"><button class="primary-action" type="submit">搜索</button></form>`;
@@ -43,7 +49,7 @@ export class NeteasePanel {
         } catch (error) { if (this.current(generation) && !signal.aborted) { const status = document.querySelector('#cloud-login-status'); if (status) status.textContent = error instanceof Error ? error.message : '登录检查失败，请刷新二维码'; } }
       };
       void poll();
-    } catch (error) { if (this.current(generation) && !signal.aborted) this.hooks.open('扫码登录网易云', `<p class="panel-empty">${esc(error instanceof Error ? error.message : '二维码加载失败')}</p><button data-action="cloud-login">重试 ↻</button>`); }
+    } catch (error) { if (this.current(generation) && !signal.aborted) this.hooks.open('扫码登录网易云', `<p class="panel-empty" role="status">${esc(error instanceof Error ? error.message : '二维码加载失败')}</p>${this.connectionHelp(error)}<button data-action="cloud-login">重试 ↻</button>`); }
   }
   private searchBody(message?: string) {
     return `${this.header()}<div class="cloud-results-heading"><span>${this.results.length} / ${this.total} TRACKS</span>${this.results.length ? '<button data-action="cloud-play-results">播放已加载歌曲 ▷</button>' : ''}</div>${message ? `<p role="status" class="help-note">${esc(message)}</p>` : ''}<div class="music-results">${this.results.map((track, index) => `<div class="music-row"><span class="row-index">${index + 1}</span><button class="row-track" data-action="cloud-show" data-id="${esc(track.id)}"><strong>${esc(track.title)}</strong><small>${esc(track.artist)} ／ ${esc(track.album)}${track.playbackNotice ? ` · ${esc(track.playbackNotice)}` : ''}</small></button><span class="row-duration">${formatTime(track.duration)}</span><div class="row-actions"><button data-action="cloud-play" data-id="${esc(track.id)}" aria-label="播放 ${esc(track.title)}" title="播放">▷</button><button data-action="cloud-enqueue" data-id="${esc(track.id)}" aria-label="下一首播放 ${esc(track.title)}" title="下一首播放">＋</button><button data-action="cloud-add" data-id="${esc(track.id)}" aria-label="归档 ${esc(track.title)}" title="加入音乐库">↓</button></div></div>`).join('') || '<p class="panel-empty">没有匹配的歌曲。</p>'}</div>${this.offset < this.total ? '<button class="cloud-more" data-action="cloud-more">加载更多 ↓</button>' : ''}<p class="help-note">点击歌名可读取歌曲卡片。播放、读取和加入队列会将对应歌曲加入音乐库。</p>`;
