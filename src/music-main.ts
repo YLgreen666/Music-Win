@@ -562,11 +562,14 @@ function frame(ms: number) {
   if (!viewer?.isOpen && (!cinema || cinema.time >= 21.9)) scene?.update(time, cinema);
   viewer?.update(time);
   if (scene && mode === 'detail') {
-    $('#detail-content').style.opacity = String(scene.detailVisibility); $('#detail-content').style.translate = `0 ${(1 - scene.detailVisibility) * 18}px`;
-    $('#detail-content').inert = scene.detailVisibility < .1;
+    const content = $('#detail-content'), opacity = String(scene.detailVisibility), translate = `0 ${(1 - scene.detailVisibility) * 18}px`;
+    if (content.style.opacity !== opacity) content.style.opacity = opacity;
+    if (content.style.translate !== translate) content.style.translate = translate;
+    const inert = scene.detailVisibility < .1; if (content.inert !== inert) content.inert = inert;
     documentReveal.update(time, scene.decryptionFrame, prefs().reduced);
   }
-  $('#stage').style.setProperty('--detail-shade', String(mode === 'boot' ? 0 : scene?.detailVisibility ?? (mode === 'detail' ? 1 : 0)));
+  const shade = String(mode === 'boot' ? 0 : scene?.detailVisibility ?? (mode === 'detail' ? 1 : 0)), stage = $('#stage');
+  if (stage.style.getPropertyValue('--detail-shade') !== shade) stage.style.setProperty('--detail-shade', shade);
   if (scene) inspection.render(scene.decryptionFrame, (x, y) => scene!.projectCard(x, y), !!cinema, !prefs().reduced);
 }
 async function initialize() {

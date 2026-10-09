@@ -1,0 +1,6 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>音乐播放器性能诊断</title></head><body>
+<div id="viewport"><main id="stage" data-layout="desktop" data-mode="archive" data-boot="done"></main></div>
+<aside><button id="run" disabled>运行三轮对比</button><button id="stop">停止</button><button id="style">切换卡片外观</button><button id="detail">抽取 / 归位</button><button id="dark">切换主题</button><button id="viewer">360° 查看</button><button id="audio">播放测试音频</button><button id="sample">采集当前状态</button><label>歌曲数 <select id="size"><option>0</option><option>1</option><option>200</option><option selected>1000</option></select></label><output id="status">正在载入…</output><output id="audio-status"></output><pre id="result"></pre></aside>
+<script type="module" src="../src/music/performance-review.ts"></script>
+<style>aside{position:fixed;right:12px;top:12px;width:400px;max-width:90vw;max-height:95vh;overflow:auto;padding:12px;background:#102024ee;color:#e4e5dd;z-index:99;font:12px sans-serif}aside button,aside select{margin:3px;padding:7px}#status{display:block;padding:8px}pre{white-space:pre-wrap}.system-nav,.archive-counter,.system-footer,.column-navigation,.powered,.back-button,.archive-hint{display:none!important}</style>
+</body></html>

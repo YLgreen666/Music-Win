@@ -7,6 +7,7 @@ type CoverSurface = {
   baseline: Pick<Surface, 'roughness' | 'transmission' | 'thickness' | 'attenuationDistance'>;
 };
 const states = new WeakMap<Surface, CoverSurface>();
+const groupSurfaces = new WeakMap<THREE.Group, THREE.Mesh[]>();
 
 /** Extend the original glass/theme shader; no duplicate shells or extra render passes. */
 export function setCoverSurface(material: Surface, name: string, enabled: boolean, tint: THREE.Color, instanced = false) {
@@ -50,10 +51,14 @@ export function setCoverSurface(material: Surface, name: string, enabled: boolea
 }
 
 export function setCoverGroup(group: THREE.Group, enabled: boolean, tint: THREE.Color) {
-  group.traverse(object => {
-    if (!(object instanceof THREE.Mesh) || !object.userData.surface) return;
+  let meshes = groupSurfaces.get(group);
+  if (!meshes) {
+    meshes = []; group.traverse(object => { if (object instanceof THREE.Mesh && object.userData.surface && tintedSurfaces.has(object.userData.surface)) meshes!.push(object); });
+    groupSurfaces.set(group, meshes);
+  }
+  for (const object of meshes) {
     setCoverSurface(object.material as Surface, object.userData.surface, enabled, tint);
-  });
+  }
 }
 
 export function coverSurfaceState(material: THREE.Material) { return states.get(material as Surface); }

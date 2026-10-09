@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { glassRevealGLSL, frostedTransmissionGLSL, FROSTED_ROUGHNESS } from "./glass-reveal.ts";
 import { internalOpticsFragment } from "./internal-optics.ts";
 import { themeMaterial } from "./theme-material";
+import { coverSurfaceState } from './music/card-appearance';
 
 type Surface = THREE.MeshPhysicalMaterial;
 type Palette = { high: Surface; low?: Surface };
@@ -10,6 +11,12 @@ type Palette = { high: Surface; low?: Surface };
 // on one mesh so transparent shells never overlap during a quality change.
 export class CardAppearance {
   private palettes = new Map<string, Palette>();
+  private groups = new WeakMap<THREE.Group, THREE.Mesh[]>();
+  private meshes(group: THREE.Group) {
+    let meshes = this.groups.get(group);
+    if (!meshes) { meshes = []; group.traverse(child => { if (child instanceof THREE.Mesh) meshes!.push(child); }); this.groups.set(group, meshes); }
+    return meshes;
+  }
   disposeSources() {
     for (const palette of this.palettes.values()) { palette.high.dispose(); palette.low?.dispose(); }
     this.palettes.clear();
@@ -20,6 +27,7 @@ export class CardAppearance {
   }
 
   prepare(group: THREE.Group) {
+    this.groups.delete(group);
     for (const child of group.children) {
       const mesh = child as THREE.Mesh;
       const name = mesh.userData.surface as string;
@@ -93,12 +101,16 @@ export class CardAppearance {
   setClarity(group: THREE.Group, value: number) {
     const clarity = THREE.MathUtils.clamp(value, 0, 1);
     // Traversal still works after the viewer reparents meshes into part groups.
-    group.traverse((child) => {
+    for (const child of this.meshes(group)) {
       if (!(child instanceof THREE.Mesh) || !child.userData.glassClarity)
-        return;
+        continue;
       child.userData.glassClarity.value = clarity;
-      if (child.userData.surface !== "Frosted_Polymer") return;
+      if (child.userData.surface !== "Frosted_Polymer") continue;
       const mat = child.material as Surface;
+      if (coverSurfaceState(mat)?.enabled.value) {
+        mat.thickness = .024; mat.transmission = .975; mat.attenuationDistance = 10;
+        continue;
+      }
       const palette = this.palettes.get("Frosted_Polymer")!;
       const quality = child.userData.appearance.value as number;
       const baseline = (
@@ -124,18 +136,18 @@ export class CardAppearance {
         8,
         clarity,
       );
-    });
+    }
   }
 
   setTheme(group: THREE.Group, value: number, subduedIndex: boolean | number = false) {
-    group.traverse(child => {
+    for (const child of this.meshes(group)) {
       if (child.userData.themeAmount) child.userData.themeAmount.value = value;
       if (child.userData.subduedIndex) child.userData.subduedIndex.value = THREE.MathUtils.clamp(Number(subduedIndex), 0, 1);
-    });
+    }
   }
 
   apply(group: THREE.Group, value: number) {
-    for (const child of group.children) {
+    for (const child of this.meshes(group)) {
       const mesh = child as THREE.Mesh;
       const palette = this.palettes.get(mesh.userData.surface);
       if (!palette) {
@@ -147,6 +159,7 @@ export class CardAppearance {
       const { high, low } = palette;
       if (!low) continue;
       const mat = mesh.material as Surface;
+      const coverGlass = mesh.userData.surface === 'Frosted_Polymer' && !!coverSurfaceState(mat)?.enabled.value;
       mat.color.copy(low.color).lerp(high.color, value);
       if (
         mat.attenuationColor &&
@@ -156,7 +169,7 @@ export class CardAppearance {
         mat.attenuationColor
           .copy(low.attenuationColor)
           .lerp(high.attenuationColor, value);
-        mat.attenuationDistance =
+        if (!coverGlass) mat.attenuationDistance =
           Number.isFinite(low.attenuationDistance) &&
           Number.isFinite(high.attenuationDistance)
             ? THREE.MathUtils.lerp(
@@ -174,6 +187,7 @@ export class CardAppearance {
         "clearcoat",
         "clearcoatRoughness",
       ] as const) {
+        if (coverGlass && (key === 'transmission' || key === 'thickness')) continue;
         mat[key] = THREE.MathUtils.lerp(low[key] ?? 0, high[key] ?? 0, value);
       }
       // Keep the same transmission shader/pass throughout the transition.
@@ -189,5 +203,6 @@ export class CardAppearance {
       if (!mesh.userData.surface) mat.map?.dispose();
       mat.dispose();
     }
+    this.groups.delete(group);
   }
 }

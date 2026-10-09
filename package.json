@@ -8,6 +8,8 @@
     "test": "node --experimental-strip-types --test scripts/check-music.mjs",
     "test:fixtures": "node scripts/create-music-fixtures.mjs",
     "typecheck": "tsc --noEmit",
+    "build:performance": "tsc --noEmit && vite build --mode performance --outDir .cache/performance-review",
+    "preview:performance": "vite preview --outDir .cache/performance-review --host 127.0.0.1 --port 4183 --strictPort",
     "postinstall": "node scripts/patch-rolling-number.mjs",
     "predev": "node scripts/patch-rolling-number.mjs",
     "dev": "vite --host 127.0.0.1",

@@ -3,6 +3,7 @@ import { ArchiveVisibility } from "./archive-visibility";
 import { ArchiveDrawCoverage, ArchiveShadowCoverage } from "./archive-draw-coverage";
 import { InstanceUpdates } from "./instance-updates";
 import { RenderState } from "./render-state";
+import { ResourcePool } from "./resource-pool";
 import { SharedDepthAO, SharedDepthBokeh } from "./shared-depth";
 import { disposeThreeTree } from "./three-resources";
 import { ThemeWave } from "./theme-motion";
@@ -21,7 +22,7 @@ import { CardAppearance } from "./appearance";
 import { configureInternalOptics } from "./internal-optics";
 import { DecryptionController } from "./decryption";
 import { fileLocation, records, musicTrack, archiveColumns, rowRebasePeriod } from "./data";
-import { MusicCoverLayer } from "./music/cover-layer";
+import { MusicCoverLayer, type CoverInstance } from "./music/cover-layer";
 import { setCoverGroup, setCoverSurface, coverSurfaceState } from "./music/card-appearance";
 import type { Track } from "./music/types";
 import {
@@ -82,12 +83,14 @@ export class ArchiveScene {
     this.disposed = true; this.loaded = false;
     this.inputEvents.abort();
     this.cancelPointer();
+    this.returningPool.dispose();
     if (this.covers) { this.scene.remove(this.covers.mesh); this.covers.dispose(); this.covers = undefined; }
     disposeThreeTree(this.scene);
     this.appearance.disposeSources();
     this.model.clear();
     this.outgoing = [];
     this.instances = [];
+    this.coverInstances.length = 0; this.drawnCells.length = 0; this.fieldRows.length = 0; this.fieldCache.clear(); this.hiddenCells.clear();
     this.assemblyTemplate?.then(disposeThreeTree).catch(() => {});
     this.assemblyTemplate = undefined;
     this.light.shadow.map?.dispose();
@@ -186,10 +189,51 @@ export class ArchiveScene {
   private shadowCoverage?: ArchiveShadowCoverage;
   private instanceCapacity = LOOP_COLUMNS * LOOP_ROWS;
   private drawnCells: ArchiveCell[] = [];
+  private hiddenCells = new Set<string>();
+  private coverInstances: CoverInstance[] = [];
+  private coverInstanceCount = 0;
+  private tintValues = new Float32Array(3);
+  private fieldCache = new Map<number, Map<number, number>>();
+  private fieldRows: Map<number, number>[] = [];
+  private spectrumPoint = new THREE.Vector3();
+  private uploadedLabels = new WeakMap<THREE.Texture, number>();
+  private uploadLabel(group: THREE.Group) {
+    const mesh = group.children[group.children.length - 1] as THREE.Mesh;
+    const texture = (mesh.material as THREE.MeshBasicMaterial).map;
+    if (texture && this.uploadedLabels.get(texture) !== texture.version) {
+      this.renderer.initTexture(texture); this.uploadedLabels.set(texture, texture.version);
+    }
+  }
   private extraCoverage = false;
   setArchiveCoverage(extra: boolean) { this.extraCoverage = extra; }
   private model = new THREE.Group();
   private appearance = new CardAppearance();
+  private returningPool = new ResourcePool<THREE.Group>(8, group => this.appearance.dispose(group));
+  private retireModel(group: THREE.Group) {
+    this.scene.remove(group); delete group.userData.musicTrack; this.returningPool.release(group);
+  }
+  private acquireReturningModel() {
+    let group = this.returningPool.acquire();
+    if (!group) {
+      group = this.model.clone(true);
+      const label = group.children[group.children.length - 1] as THREE.Mesh;
+      const canvas = document.createElement('canvas'); canvas.width = 1024; canvas.height = 440;
+      const map = new THREE.CanvasTexture(canvas); map.colorSpace = THREE.SRGBColorSpace;
+      label.material = new THREE.MeshBasicMaterial({ map, toneMapped: false, transparent: true, depthWrite: false });
+      this.appearance.prepare(group);
+    }
+    const label = group.children[group.children.length - 1] as THREE.Mesh;
+    const map = (label.material as THREE.MeshBasicMaterial).map as THREE.CanvasTexture;
+    (map.image as HTMLCanvasElement).getContext('2d')!.drawImage(this.labelCanvas, 0, 0); map.needsUpdate = true;
+    group.position.copy(this.model.position); group.quaternion.copy(this.model.quaternion); group.scale.copy(this.model.scale);
+    group.userData.musicTrack = this.musicTrackForModel;
+    for (let i = 0; i < group.children.length; i++) group.children[i].visible = this.model.children[i].visible;
+    // Pooled materials may still be in the other cover mode. Reset before applying clarity.
+    setCoverGroup(group, false, this.covers!.colorFor());
+    this.appearance.apply(group, ease(this.lift.value / .4)); this.appearance.setClarity(group, this.modelClarity());
+    setCoverGroup(group, this.coverStyle, this.covers!.colorFor(this.musicTrackForModel));
+    return group;
+  }
   private decryption = new DecryptionController();
   private cursor = new THREE.Vector2();
   private raycaster = new THREE.Raycaster();
@@ -247,7 +291,7 @@ export class ArchiveScene {
   }
   refreshCatalog(index: number) {
     this.cancelPointer(); this.setHover(null);
-    for (const old of this.outgoing) { this.scene.remove(old.group); this.appearance.dispose(old.group); }
+    for (const old of this.outgoing) this.retireModel(old.group);
     this.outgoing = []; this.pulses = []; this.coordinateOrigin = { lane: 0, row: 0 };
     const location = fileLocation(index); this.selectedCell = { lane: location.lane, row: location.row };
     this.selectedSlot = index; this.musicTrackForModel = musicTrack(index); this.drawLabel(index);
@@ -318,6 +362,8 @@ export class ArchiveScene {
     );
     container.appendChild(this.renderer.domElement);
     this.renderer.domElement.addEventListener('webglcontextrestored', () => {
+      this.covers?.restoreTexture();
+      this.uploadedLabels = new WeakMap();
       this.renderState.invalidate();
       this.shadowState.invalidate();
     }, { signal: this.inputEvents.signal });
@@ -637,10 +683,7 @@ export class ArchiveScene {
       const canonical = fileLocation(this.selectedSlot);
       this.selectedCell = { lane: canonical.lane, row: canonical.row };
       this.coordinateOrigin = { lane: 0, row: 0 };
-      for (const old of this.outgoing) {
-        this.scene.remove(old.group);
-        this.appearance.dispose(old.group);
-      }
+      for (const old of this.outgoing) this.retireModel(old.group);
       this.outgoing = [];
     }
     this.lastInteraction = this.clock;
@@ -772,27 +815,7 @@ export class ArchiveScene {
       : { lane: canonical.lane, row: canonical.row };
     const changed = !sameCell(cell, this.selectedCell);
     if (this.looping && changed && this.loaded && this.lift.value > 0.0001) {
-      const group = this.model.clone(true);
-      group.userData.musicTrack = this.musicTrackForModel;
-      const label = group.children[group.children.length - 1] as THREE.Mesh;
-      const canvas = document.createElement("canvas");
-      canvas.width = 1024;
-      canvas.height = 440;
-      canvas.getContext("2d")!.drawImage(this.labelCanvas, 0, 0);
-      const map = new THREE.CanvasTexture(canvas);
-      map.colorSpace = THREE.SRGBColorSpace;
-      label.material = new THREE.MeshBasicMaterial({
-        map,
-        toneMapped: false,
-        transparent: true,
-        depthWrite: false,
-      });
-      // Clone carries the selected label material by reference. Replace it
-      // before installing appearance shaders, so theme hooks are not appended
-      // to the original label a second time on every selection.
-      this.appearance.prepare(group);
-      this.appearance.apply(group, ease(this.lift.value / 0.4));
-      this.appearance.setClarity(group, this.modelClarity());
+      const group = this.acquireReturningModel();
       this.scene.add(group);
       this.outgoing.push({
         group,
@@ -820,8 +843,7 @@ export class ArchiveScene {
       this.rotation = o.group.rotation.y;
       this.returnY = o.returnY;
       this.decryption.select(o.clarity);
-      this.scene.remove(o.group);
-      this.appearance.dispose(o.group);
+      this.retireModel(o.group);
       this.outgoing.splice(returning, 1);
     }
     if (this.deferSelectionPulse) {
@@ -1387,12 +1409,12 @@ export class ArchiveScene {
       const next = height + ((key === gameTarget ? .95 : 0) - height) * (this.reduced ? 1 : 1 - Math.exp(-dt * 8));
       if (next < .001 && key !== gameTarget) this.relayLifts.delete(key); else this.relayLifts.set(key, next);
     }
-    const spectrumPoint = new THREE.Vector3();
+    const spectrumPoint = this.spectrumPoint;
     const screenX = (row: number, lane: number) => {
       spectrumPoint.set((lane - 2) * COLUMN_SPACING - trackX, -4.6, (row - 15.5) * ROW_SPACING + this.rail.value).project(this.camera);
       return (spectrumPoint.x + 1) / 2;
     };
-    const fieldCache = new Map<number, Map<number, number>>();
+    const fieldCache = this.fieldCache; fieldCache.clear(); let fieldRowCount = 0;
     const calculateField = (row: number, lane: number) => {
       if (cinematic)
         return cinematicField(
@@ -1438,7 +1460,10 @@ export class ArchiveScene {
     };
     const field = (row: number, lane: number): number => {
       let values = fieldCache.get(lane);
-      if (!values) { values = new Map(); fieldCache.set(lane, values); }
+      if (!values) {
+        values = this.fieldRows[fieldRowCount] ?? (this.fieldRows[fieldRowCount] = new Map()); fieldRowCount++;
+        values.clear(); fieldCache.set(lane, values);
+      }
       const previous = values.get(row);
       if (previous !== undefined) return previous;
       const value = calculateField(row, lane);
@@ -1523,8 +1548,7 @@ export class ArchiveScene {
         (1 - detail) *
         (1 - quality);
       if (o.lift.value < 0.0001 && Math.abs(o.group.rotation.y) < 0.0001) {
-        this.scene.remove(o.group);
-        this.appearance.dispose(o.group);
+        this.retireModel(o.group);
         this.outgoing.splice(i, 1);
       }
     }
@@ -1733,15 +1757,16 @@ export class ArchiveScene {
     this.camera.updateProjectionMatrix();
     this.camera.updateMatrixWorld();
     // Music can depend on projected X; invalidate after the camera advances.
-    if (activePlay && !this.reduced) fieldCache.clear();
+    if (activePlay && !this.reduced) { fieldCache.clear(); fieldRowCount = 0; }
     // Build and compact the instance set only after the actual damped camera
     // is final for this frame. Picking uses the same packed index-to-cell map.
     const fixed = (Boolean(cinematic) || !this.looping) && !responsiveOpening;
     this.cells = fixed ? Array.from({ length: 160 }, (_, i) => poolCell(i))
       : this.visibility.update(this.camera, fog.far, trackX, entryZ + this.rail.value, this.extraCoverage);
-    const hidden = new Set(this.outgoing.map(o => cellKey(o.cell)));
+    const hidden = this.hiddenCells; hidden.clear();
+    for (const old of this.outgoing) hidden.add(cellKey(old.cell));
     hidden.add(cellKey(this.selectedCell));
-    this.drawnCells = [];
+    this.drawnCells.length = 0;
     this.relayPoints.clear();
     this.drawCoverage.update(this.camera);
     this.shadowCoverage?.begin();
@@ -1781,25 +1806,36 @@ export class ArchiveScene {
     if (matricesChanged || countChanged || !this.instances[0].boundingSphere) this.instances[0].computeBoundingSphere();
     this.themeUpdates?.commit();
     if (this.covers) {
-      this.model.updateMatrixWorld(true);
-      const covers = [{ matrix: this.model.matrixWorld.clone(), track: this.musicTrackForModel }];
-      for (const old of this.outgoing) { old.group.updateMatrixWorld(true); covers.push({ matrix: old.group.matrixWorld.clone(), track: old.group.userData.musicTrack }); }
-      if (this.coverStyle) for (const [index, cell] of this.drawnCells.entries()) {
-        const matrix = new THREE.Matrix4().fromArray(this.instances[0].instanceMatrix.array, index * 16);
-        covers.push({ matrix, track: musicTrack(fileAtCell(cell)) });
+      this.coverInstanceCount = 0;
+      const add = (matrix: THREE.Matrix4 | undefined, array: ArrayLike<number> | undefined, offset: number, track: Track | undefined, priority: number) => {
+        const item = this.coverInstances[this.coverInstanceCount] ?? (this.coverInstances[this.coverInstanceCount] = {});
+        item.matrix = matrix; item.array = array; item.offset = offset; item.track = track; item.priority = priority; this.coverInstanceCount++;
+      };
+      if (this.coverStyle) {
+        this.model.updateWorldMatrix(true, false); add(this.model.matrixWorld, undefined, 0, this.musicTrackForModel, 0);
+        for (const old of this.outgoing) { old.group.updateWorldMatrix(true, false); add(old.group.matrixWorld, undefined, 0, old.group.userData.musicTrack, 1); }
+        for (let index = 0; index < this.drawnCells.length; index++) {
+          const cell = this.drawnCells[index];
+          add(undefined, this.instances[0].instanceMatrix.array, index * 16, musicTrack(fileAtCell(cell)), 2 + ((cell.lane - selectedLane) * 2.2) ** 2 + (cell.row - selectedRow) ** 2);
+        }
       }
-      this.covers.update(covers, this.coverStyle);
+      // Keep reusable records outside the active slice rather than recreating them.
+      this.covers.update(this.coverInstances, this.coverStyle, this.coverInstanceCount);
+      this.covers.upload(this.renderer);
       setCoverGroup(this.model, this.coverStyle, this.covers.colorFor(this.musicTrackForModel));
       for (const old of this.outgoing) setCoverGroup(old.group, this.coverStyle, this.covers.colorFor(old.group.userData.musicTrack));
       if (this.coverStyle && this.borderColors) {
         this.borderUpdates ??= new InstanceUpdates(this.borderColors);
         for (const [index, cell] of this.drawnCells.entries()) {
           const tint = this.covers.colorFor(musicTrack(fileAtCell(cell)));
-          this.borderUpdates.set(index * 3, [tint.r, tint.g, tint.b]);
+          this.tintValues[0] = tint.r; this.tintValues[1] = tint.g; this.tintValues[2] = tint.b;
+          this.borderUpdates.set(index * 3, this.tintValues);
         }
         this.borderUpdates.commit();
       }
     }
+    this.uploadLabel(this.model);
+    for (const old of this.outgoing) this.uploadLabel(old.group);
     let neighborTop = -Infinity;
     const lane = selectedLane,
       row = selectedRow;
@@ -1851,6 +1887,7 @@ export class ArchiveScene {
       state.invalidate();
     } else {
       state.begin();
+      if (this.covers) state.add(...this.covers.revision);
       state.floats(...this.camera.projectionMatrix.elements, ...this.camera.matrixWorldInverse.elements,
         ...this.camera.position.toArray(),
         fog.near, fog.far, this.themeAmount, this.subduedIndex.value,
@@ -1895,10 +1932,8 @@ export class ArchiveScene {
     else this.composer.render();
   }
   projectCard(x: number, y: number) {
-    this.model.updateMatrixWorld(true);
-    const p = this.model
-      .localToWorld(new THREE.Vector3(x, y, 0.255))
-      .project(this.camera);
+    // The scene frame has already updated the complete world matrix tree.
+    const p = this.spectrumPoint.set(x, y, .255).applyMatrix4(this.model.matrixWorld).project(this.camera);
     return [(p.x + 1) * this.container.clientWidth / 2, (1 - p.y) * this.container.clientHeight / 2];
   }
   get decryptionFrame() { return this.decryption.frame; }
@@ -1929,6 +1964,8 @@ export class ArchiveScene {
       fieldOfView: this.camera.fov,
       loaded: this.loaded,
       drawCalls: this.renderer.info.render.calls,
+      pooledModels: this.returningPool.size,
+      covers: this.covers?.getStats(),
       renderedFrames: this.renderedFrames,
       reusedFrames: this.reusedFrames,
       superPerformance: this.superPerformance,

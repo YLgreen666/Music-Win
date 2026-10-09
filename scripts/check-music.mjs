@@ -14,6 +14,89 @@ import { setCoverSurface, coverSurfaceState } from '../src/music/card-appearance
 import { NeteaseMusicProvider, NeteaseConnectionError, neteaseTrack, secureMediaUrl } from '../src/music/netease.ts';
 import { MusicProviders } from '../src/music/providers.ts';
 import * as THREE from 'three';
+import { InstanceUpdates } from '../src/instance-updates.ts';
+import { RenderState } from '../src/render-state.ts';
+import { CoverSlots } from '../src/music/cover-slots.ts';
+import { MusicCoverLayer } from '../src/music/cover-layer.ts';
+import { ResourcePool } from '../src/resource-pool.ts';
+import { copyAtlasTile } from '../src/music/atlas-pixels.ts';
+
+test('partial atlas upload preserves row orientation and neighboring tile pixels', () => {
+  const pixels = new Uint8Array(4 * 4 * 4).fill(17), source = new Uint8ClampedArray([1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255]);
+  copyAtlasTile(pixels, source, 1, 1, 2, 4, 4);
+  assert.deepEqual([...pixels.slice((2 * 4 + 1) * 4, (2 * 4 + 3) * 4)], [...source.slice(0, 8)]);
+  assert.deepEqual([...pixels.slice((1 * 4 + 1) * 4, (1 * 4 + 3) * 4)], [...source.slice(8)]);
+  assert.deepEqual([...pixels.slice(0, 4)], [17, 17, 17, 17]);
+});
+
+test('instance updates upload only changed Float32 ranges and retain unrendered ranges', () => {
+  const attr = new THREE.InstancedBufferAttribute(new Float32Array(20), 1), updates = new InstanceUpdates(attr);
+  updates.set(5, [.1, .2]); assert.equal(updates.commit(), true);
+  assert.deepEqual(attr.updateRanges, [{ start: 5, count: 2 }]); const version = attr.version;
+  updates.set(5, [.1, .2]); assert.equal(updates.commit(), false); assert.equal(attr.version, version);
+  updates.scalar(15, 1); updates.commit(); assert.equal(attr.updateRanges.length, 2);
+});
+
+test('cover residency retains nearby cached songs, prioritizes current songs and rejects reused-slot results', () => {
+  const cache = new CoverSlots(), evicted = [];
+  cache.reconcile(Array.from({ length: 63 }, (_, i) => `track-${i}`), id => evicted.push(id));
+  const slot = cache.slots.get('track-0'), generation = cache.generations[slot];
+  cache.reconcile(['track-1', 'track-2'], id => evicted.push(id)); assert.equal(cache.slots.size, 63); assert.equal(evicted.length, 0);
+  cache.reconcile(['new', 'track-1'], id => evicted.push(id)); assert.equal(cache.slots.size, 63); assert.equal(cache.slots.get('new'), slot);
+  assert.equal(cache.valid('track-0', slot, generation), false); assert.equal(cache.valid('new', slot, generation), false);
+  cache.reconcile(Array.from({ length: 1000 }, (_, i) => `large-${i}`), id => evicted.push(id)); assert.equal(cache.slots.size, 63);
+  assert.ok(cache.slots.has('large-0')); assert.ok(!cache.slots.has('large-63')); cache.clear(); assert.equal(cache.slots.size, 0);
+});
+
+test('returning-resource pool caps only idle resources and disposes each resource once', () => {
+  const disposed = [], pool = new ResourcePool(8, value => disposed.push(value));
+  for (let i = 0; i < 10; i++) pool.release(i);
+  assert.equal(pool.size, 8); assert.deepEqual(disposed, [8, 9]); const reused = pool.acquire(); assert.equal(reused, 7);
+  pool.release(reused); pool.dispose(); pool.dispose(); assert.equal(new Set(disposed).size, 10); assert.equal(disposed.length, 10);
+});
+
+test('render snapshots invalidate when a cover atlas or UV slot revision changes', () => {
+  const state = new RenderState(); state.begin(); state.add(0, 0); assert.equal(state.end(), true);
+  state.begin(); state.add(0, 0); assert.equal(state.end(), false);
+  state.begin(); state.add(0, 1); assert.equal(state.end(), true);
+  state.begin(); state.add(1, 1); assert.equal(state.end(), true);
+});
+
+test('cover layer batches uploads, caps decoding at two, rejects stale images and grows instance buffers', async () => {
+  const savedDocument = globalThis.document, savedBitmap = globalThis.createImageBitmap;
+  const decoded = [], gates = []; let paints = 0, closed = 0;
+  globalThis.document = { createElement: () => ({ width: 0, height: 0, getContext: () => ({
+    fillRect() {}, beginPath() {}, arc() {}, stroke() {}, fillText() {}, drawImage() { paints++; }, getImageData: (_x, _y, width = 1, height = 1) => ({ data: new Uint8ClampedArray(width * height * 4).fill(255) }),
+  }) }) };
+  globalThis.createImageBitmap = blob => { decoded.push(blob); return new Promise(resolve => gates.push(() => resolve({ width: 256, height: 256, close() { closed++; } }))); };
+  let layer;
+  try {
+    layer = new MusicCoverLayer(); const matrix = new THREE.Matrix4();
+    const items = ['one', 'two', 'three'].map(id => ({ matrix, track: { id, title: id, cover: new Blob([id]) } }));
+    layer.update(items, true); assert.equal(decoded.length, 2); assert.equal(layer.getStats().commits, 1);
+    const atlas = layer.mesh.material.map; assert.equal(atlas.updateRanges.length, 0); atlas.onUpdate(atlas); // simulate the initial whole-atlas upload
+    const matrixVersion = layer.mesh.instanceMatrix.version, slotVersion = layer.mesh.geometry.getAttribute('musicSlot').version;
+    layer.update(items, true); assert.equal(layer.getStats().commits, 1); assert.equal(layer.mesh.instanceMatrix.version, matrixVersion);
+    assert.equal(layer.mesh.geometry.getAttribute('musicSlot').version, slotVersion);
+    // A changed source must not accept the old decode finishing later.
+    items[0].track.cover = new Blob(['replacement']); gates.splice(0).forEach(resolve => resolve());
+    await new Promise(resolve => setImmediate(resolve)); layer.update(items, true);
+    assert.equal(closed, 2); assert.equal(paints, 2); // one atlas paint plus its color sample; stale result had neither.
+    assert.ok(atlas.updateRanges.length > 0); assert.ok(atlas.updateRanges.every(range => range.count === 256 * 4));
+    assert.ok(layer.getStats().active <= 2); assert.equal(layer.getStats().commits, 2);
+    gates.splice(0).forEach(resolve => resolve()); await new Promise(resolve => setImmediate(resolve)); layer.update(items, true);
+    assert.equal(layer.getStats().commits, 3); assert.equal(closed, 4);
+    const decodeCount = decoded.length; layer.update([items[1]], true); layer.update(items, true); assert.equal(decoded.length, decodeCount);
+    items[0].track.cover = new Blob(['url-version']); layer.update(items, true);
+    const paintsBeforeUrlChange = paints; items[0].track.coverUrl = 'https://example.invalid/new-cover';
+    gates.splice(0).forEach(resolve => resolve()); await new Promise(resolve => setImmediate(resolve)); layer.update(items, true);
+    assert.equal(paints, paintsBeforeUrlChange); // URL revision rejects a decode even if its Blob did not change.
+    gates.splice(0).forEach(resolve => resolve()); await new Promise(resolve => setImmediate(resolve)); layer.update(items, true);
+    layer.update(Array.from({ length: 700 }, () => items[1]), true); assert.equal(layer.mesh.count, 700); assert.ok(layer.mesh.instanceMatrix.count >= 700);
+    layer.restoreTexture(); assert.equal(atlas.updateRanges.length, 0);
+    layer.dispose(); assert.equal(layer.getStats().resident, 0); assert.equal(layer.getStats().ready, 0);
+  } finally { layer?.dispose(); globalThis.document = savedDocument; globalThis.createImageBitmap = savedBitmap; }
+});
 
 test('cover frame leaves equal narrow margins and crops without stretching the source', () => {
   assert.ok(Math.abs((5 - coverFrame.width) / 2 - .12) < 1e-6);

@@ -14,6 +14,8 @@ export function inspectionSegments(frame: DecryptionFrame) {
 }
 
 export class InspectionOverlay {
+  private setAttribute(node: Element, key: string, value: string) { if (node.getAttribute(key) !== value) node.setAttribute(key, value); }
+  private opacity(node: SVGElement | HTMLElement, value: number) { const text = String(value); if (node.style.opacity !== text) node.style.opacity = text; }
   private root = document.querySelector<SVGSVGElement>("#inspection-marks")!;
   private line = this.root.querySelector<SVGPathElement>("#inspection-lines")!;
   private corners = this.root.querySelector<SVGGElement>(
@@ -22,6 +24,10 @@ export class InspectionOverlay {
   private point =
     this.root.querySelector<SVGCircleElement>("#inspection-point")!;
   private label = document.querySelector<HTMLElement>("#inspection-text")!;
+  private cornerNodes = SCAN_CORNERS.map(() => {
+    const node = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    node.setAttribute('width', '8'); node.setAttribute('height', '8'); this.corners.appendChild(node); return node;
+  });
 
   render(
     frame: DecryptionFrame,
@@ -30,37 +36,31 @@ export class InspectionOverlay {
     enabled = true,
   ) {
     const host = document.querySelector<HTMLElement>("#three-scene")!;
-    this.root.setAttribute("viewBox", `0 0 ${host.clientWidth} ${host.clientHeight}`);
-    this.root.style.opacity =
+    this.setAttribute(this.root, "viewBox", `0 0 ${host.clientWidth} ${host.clientHeight}`);
+    this.opacity(this.root,
       enabled && (frame.intervals.length || frame.markers > 0 || frame.point > 0)
-        ? "1"
-        : "0";
-    this.root.dataset.phase = frame.phase;
-    this.root.dataset.referenceTime = frame.time.toFixed(3);
-    this.line.setAttribute(
+        ? 1
+        : 0);
+    if (this.root.dataset.phase !== frame.phase) this.root.dataset.phase = frame.phase;
+    const referenceTime = frame.time.toFixed(3); if (this.root.dataset.referenceTime !== referenceTime) this.root.dataset.referenceTime = referenceTime;
+    this.setAttribute(this.line,
       "d",
       inspectionSegments(frame)
         .map(([a, b]) => `M${project(...a)}L${project(...b)}`)
         .join(""),
     );
-    this.corners.style.opacity = String(frame.markers);
-    this.corners.innerHTML =
-      frame.markers > 0
-        ? SCAN_CORNERS.map(([x, y]) => {
-            const [px, py] = project(x, y);
-            return `<rect x="${px - 4}" y="${py - 4}" width="8" height="8"/>`;
-          }).join("")
-        : "";
-    const [cx, cy] = project(
-      (SCAN_FROM[0] + SCAN_TO[0]) / 2,
-      (SCAN_FROM[1] + SCAN_TO[1]) / 2,
-    );
-    this.point.setAttribute("cx", String(cx));
-    this.point.setAttribute("cy", String(cy));
-    this.point.style.opacity = String(frame.point);
-    this.label.style.opacity = String(enabled && showLabel ? frame.label : 0);
-    this.label.querySelector<HTMLElement>("strong")!.style.opacity = String(
-      frame.labelValue,
-    );
+    this.opacity(this.corners, frame.markers);
+    if (frame.markers > 0) SCAN_CORNERS.forEach(([x, y], i) => {
+      const [px, py] = project(x, y); this.setAttribute(this.cornerNodes[i], 'x', String(px - 4)); this.setAttribute(this.cornerNodes[i], 'y', String(py - 4));
+    });
+    if (frame.point > 0) {
+      const [cx, cy] = project(
+        (SCAN_FROM[0] + SCAN_TO[0]) / 2,
+        (SCAN_FROM[1] + SCAN_TO[1]) / 2,
+      );
+      this.setAttribute(this.point, "cx", String(cx)); this.setAttribute(this.point, "cy", String(cy));
+    }
+    this.opacity(this.point, frame.point); this.opacity(this.label, enabled && showLabel ? frame.label : 0);
+    this.opacity(this.label.querySelector<HTMLElement>('strong')!, frame.labelValue);
   }
 }

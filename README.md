@@ -53,6 +53,8 @@ npm run preview -- --port 4173
 
 三维阵列按视口裁剪，不为千首索引创建千个模型。封面按需解码，采用固定 64 格纹理图集并回收位图。WebGL 不可用时保留音乐索引和播放控制。窄屏上方模型、下方滚动详情。
 
+性能诊断使用独立的合成歌曲，不读取音乐库或登录信息。开发服务可打开 `/verification/music-performance.html`；生产代码测量运行 `npm run build:performance` 和 `npm run preview:performance`，再打开 `http://127.0.0.1:4183/verification/music-performance.html`。页面按需显示显卡、实际渲染尺寸、CPU/GPU 耗时和纹理上传计数；普通播放器不启用计时。验证记录见 `verification/MUSIC-PERFORMANCE.md`。
+
 ## PWA 安装与更新
 
 运行生产预览或 HTTPS 生产站点，等待设置显示“离线资源已就绪”。Chrome / Edge 可通过地址栏安装图标或浏览器菜单安装；可用时设置也显示安装入口。开发模式不注册离线缓存。

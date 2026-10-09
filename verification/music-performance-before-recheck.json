@@ -1,0 +1,698 @@
+[
+  {
+    "pass": 1,
+    "cover": true,
+    "warm": false,
+    "gpuName": "ANGLE (NVIDIA, NVIDIA GeForce RTX 5070 Ti Laptop GPU (0x00002F58) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    "resolution": [
+      1920,
+      1080
+    ],
+    "dpr": 1,
+    "cpu": {
+      "count": 145,
+      "p50": 4.699999988079071,
+      "p95": 7.0999999940395355,
+      "over50": 4
+    },
+    "interval": {
+      "count": 144,
+      "p50": 52.899999999999636,
+      "p95": 111.89999999999998,
+      "over50": 78
+    },
+    "gpu": {
+      "count": 145,
+      "p50": 41.874144,
+      "p95": 62.799872,
+      "over50": 42
+    },
+    "atlasUploads": 136,
+    "memory": {
+      "geometries": 14,
+      "textures": 35
+    },
+    "programs": 30,
+    "cards": 219,
+    "calls": 621,
+    "triangles": 4028543,
+    "selectionCPU": {
+      "select": {
+        "count": 49,
+        "p50": 0.7999999821186066,
+        "p95": 1.2999999821186066,
+        "over50": 0
+      },
+      "drawLabel": {
+        "count": 49,
+        "p50": 0.19999998807907104,
+        "p95": 0.5999999940395355,
+        "over50": 0
+      },
+      "setCardStyle": {
+        "count": 49,
+        "p50": 0.09999999403953552,
+        "p95": 0.20000001788139343,
+        "over50": 0
+      }
+    }
+  },
+  {
+    "pass": 1,
+    "cover": true,
+    "warm": true,
+    "gpuName": "ANGLE (NVIDIA, NVIDIA GeForce RTX 5070 Ti Laptop GPU (0x00002F58) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    "resolution": [
+      1920,
+      1080
+    ],
+    "dpr": 1,
+    "cpu": {
+      "count": 175,
+      "p50": 4,
+      "p95": 6.399999976158142,
+      "over50": 0
+    },
+    "interval": {
+      "count": 174,
+      "p50": 47.100000000000364,
+      "p95": 88.10000000000036,
+      "over50": 80
+    },
+    "gpu": {
+      "count": 174,
+      "p50": 40.145632,
+      "p95": 52.556096,
+      "over50": 22
+    },
+    "atlasUploads": 162,
+    "memory": {
+      "geometries": 14,
+      "textures": 33
+    },
+    "programs": 30,
+    "cards": 220,
+    "calls": 572,
+    "triangles": 3957669,
+    "selectionCPU": {
+      "select": {
+        "count": 50,
+        "p50": 0.699999988079071,
+        "p95": 1,
+        "over50": 0
+      },
+      "drawLabel": {
+        "count": 50,
+        "p50": 0.10000002384185791,
+        "p95": 0.29999998211860657,
+        "over50": 0
+      },
+      "setCardStyle": {
+        "count": 50,
+        "p50": 0.09999999403953552,
+        "p95": 0.19999998807907104,
+        "over50": 0
+      }
+    }
+  },
+  {
+    "pass": 1,
+    "cover": false,
+    "warm": false,
+    "gpuName": "ANGLE (NVIDIA, NVIDIA GeForce RTX 5070 Ti Laptop GPU (0x00002F58) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    "resolution": [
+      1920,
+      1080
+    ],
+    "dpr": 1,
+    "cpu": {
+      "count": 1164,
+      "p50": 3.4000000059604645,
+      "p95": 5.0999999940395355,
+      "over50": 3
+    },
+    "interval": {
+      "count": 1163,
+      "p50": 5.900000000001455,
+      "p95": 11.599999999998545,
+      "over50": 3
+    },
+    "gpu": {
+      "count": 1160,
+      "p50": 5.641184,
+      "p95": 6.724,
+      "over50": 2
+    },
+    "atlasUploads": 0,
+    "memory": {
+      "geometries": 20,
+      "textures": 31
+    },
+    "programs": 49,
+    "cards": 223,
+    "calls": 888,
+    "triangles": 7045021,
+    "selectionCPU": {
+      "select": {
+        "count": 49,
+        "p50": 0.699999988079071,
+        "p95": 0.9000000059604645,
+        "over50": 0
+      },
+      "drawLabel": {
+        "count": 49,
+        "p50": 0.10000002384185791,
+        "p95": 0.20000001788139343,
+        "over50": 0
+      },
+      "setCardStyle": {
+        "count": 49,
+        "p50": 0,
+        "p95": 0.19999998807907104,
+        "over50": 0
+      }
+    }
+  },
+  {
+    "pass": 1,
+    "cover": false,
+    "warm": true,
+    "gpuName": "ANGLE (NVIDIA, NVIDIA GeForce RTX 5070 Ti Laptop GPU (0x00002F58) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    "resolution": [
+      1920,
+      1080
+    ],
+    "dpr": 1,
+    "cpu": {
+      "count": 1242,
+      "p50": 3.5,
+      "p95": 5,
+      "over50": 1
+    },
+    "interval": {
+      "count": 1241,
+      "p50": 5.900000000001455,
+      "p95": 6.19999999999709,
+      "over50": 1
+    },
+    "gpu": {
+      "count": 1237,
+      "p50": 5.627648,
+      "p95": 6.5464,
+      "over50": 1
+    },
+    "atlasUploads": 0,
+    "memory": {
+      "geometries": 20,
+      "textures": 31
+    },
+    "programs": 49,
+    "cards": 221,
+    "calls": 888,
+    "triangles": 7019821,
+    "selectionCPU": {
+      "select": {
+        "count": 50,
+        "p50": 0.7000000178813934,
+        "p95": 1.0999999940395355,
+        "over50": 0
+      },
+      "drawLabel": {
+        "count": 50,
+        "p50": 0.19999998807907104,
+        "p95": 0.30000001192092896,
+        "over50": 0
+      },
+      "setCardStyle": {
+        "count": 50,
+        "p50": 0,
+        "p95": 0.10000002384185791,
+        "over50": 0
+      }
+    }
+  },
+  {
+    "pass": 2,
+    "cover": true,
+    "warm": false,
+    "gpuName": "ANGLE (NVIDIA, NVIDIA GeForce RTX 5070 Ti Laptop GPU (0x00002F58) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    "resolution": [
+      1920,
+      1080
+    ],
+    "dpr": 1,
+    "cpu": {
+      "count": 160,
+      "p50": 4.0999999940395355,
+      "p95": 5.9000000059604645,
+      "over50": 0
+    },
+    "interval": {
+      "count": 159,
+      "p50": 52.900000000001455,
+      "p95": 88.29999999999563,
+      "over50": 89
+    },
+    "gpu": {
+      "count": 159,
+      "p50": 41.80576,
+      "p95": 53.433824,
+      "over50": 38
+    },
+    "atlasUploads": 152,
+    "memory": {
+      "geometries": 20,
+      "textures": 34
+    },
+    "programs": 39,
+    "cards": 220,
+    "calls": 595,
+    "triangles": 3990555,
+    "selectionCPU": {
+      "select": {
+        "count": 50,
+        "p50": 0.699999988079071,
+        "p95": 1.100000023841858,
+        "over50": 0
+      },
+      "drawLabel": {
+        "count": 50,
+        "p50": 0.10000002384185791,
+        "p95": 0.20000001788139343,
+        "over50": 0
+      },
+      "setCardStyle": {
+        "count": 50,
+        "p50": 0.09999999403953552,
+        "p95": 0.20000001788139343,
+        "over50": 0
+      }
+    }
+  },
+  {
+    "pass": 2,
+    "cover": true,
+    "warm": true,
+    "gpuName": "ANGLE (NVIDIA, NVIDIA GeForce RTX 5070 Ti Laptop GPU (0x00002F58) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    "resolution": [
+      1920,
+      1080
+    ],
+    "dpr": 1,
+    "cpu": {
+      "count": 179,
+      "p50": 3.800000011920929,
+      "p95": 6.199999988079071,
+      "over50": 0
+    },
+    "interval": {
+      "count": 178,
+      "p50": 46.900000000001455,
+      "p95": 94,
+      "over50": 75
+    },
+    "gpu": {
+      "count": 179,
+      "p50": 41.34176,
+      "p95": 54.229312,
+      "over50": 33
+    },
+    "atlasUploads": 158,
+    "memory": {
+      "geometries": 20,
+      "textures": 35
+    },
+    "programs": 39,
+    "cards": 218,
+    "calls": 624,
+    "triangles": 4033457,
+    "selectionCPU": {
+      "select": {
+        "count": 50,
+        "p50": 0.7999999821186066,
+        "p95": 1.0999999940395355,
+        "over50": 0
+      },
+      "drawLabel": {
+        "count": 50,
+        "p50": 0.19999998807907104,
+        "p95": 0.29999998211860657,
+        "over50": 0
+      },
+      "setCardStyle": {
+        "count": 50,
+        "p50": 0.09999999403953552,
+        "p95": 0.20000001788139343,
+        "over50": 0
+      }
+    }
+  },
+  {
+    "pass": 2,
+    "cover": false,
+    "warm": false,
+    "gpuName": "ANGLE (NVIDIA, NVIDIA GeForce RTX 5070 Ti Laptop GPU (0x00002F58) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    "resolution": [
+      1920,
+      1080
+    ],
+    "dpr": 1,
+    "cpu": {
+      "count": 1142,
+      "p50": 3.5999999940395355,
+      "p95": 5.200000017881393,
+      "over50": 3
+    },
+    "interval": {
+      "count": 1141,
+      "p50": 5.900000000001455,
+      "p95": 11.599999999998545,
+      "over50": 4
+    },
+    "gpu": {
+      "count": 1138,
+      "p50": 5.703744,
+      "p95": 6.854976,
+      "over50": 3
+    },
+    "atlasUploads": 0,
+    "memory": {
+      "geometries": 20,
+      "textures": 31
+    },
+    "programs": 49,
+    "cards": 222,
+    "calls": 888,
+    "triangles": 7032421,
+    "selectionCPU": {
+      "select": {
+        "count": 49,
+        "p50": 0.7000000178813934,
+        "p95": 1,
+        "over50": 0
+      },
+      "drawLabel": {
+        "count": 49,
+        "p50": 0.10000002384185791,
+        "p95": 0.20000001788139343,
+        "over50": 0
+      },
+      "setCardStyle": {
+        "count": 49,
+        "p50": 0,
+        "p95": 0.10000002384185791,
+        "over50": 0
+      }
+    }
+  },
+  {
+    "pass": 2,
+    "cover": false,
+    "warm": true,
+    "gpuName": "ANGLE (NVIDIA, NVIDIA GeForce RTX 5070 Ti Laptop GPU (0x00002F58) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    "resolution": [
+      1920,
+      1080
+    ],
+    "dpr": 1,
+    "cpu": {
+      "count": 1232,
+      "p50": 3.4000000059604645,
+      "p95": 5,
+      "over50": 1
+    },
+    "interval": {
+      "count": 1231,
+      "p50": 5.900000000001455,
+      "p95": 6.19999999999709,
+      "over50": 1
+    },
+    "gpu": {
+      "count": 1228,
+      "p50": 5.677984,
+      "p95": 6.433216,
+      "over50": 0
+    },
+    "atlasUploads": 0,
+    "memory": {
+      "geometries": 20,
+      "textures": 31
+    },
+    "programs": 49,
+    "cards": 222,
+    "calls": 888,
+    "triangles": 7032421,
+    "selectionCPU": {
+      "select": {
+        "count": 50,
+        "p50": 0.7000000178813934,
+        "p95": 0.9000000059604645,
+        "over50": 0
+      },
+      "drawLabel": {
+        "count": 50,
+        "p50": 0.19999998807907104,
+        "p95": 0.20000001788139343,
+        "over50": 0
+      },
+      "setCardStyle": {
+        "count": 50,
+        "p50": 0,
+        "p95": 0.10000002384185791,
+        "over50": 0
+      }
+    }
+  },
+  {
+    "pass": 3,
+    "cover": true,
+    "warm": false,
+    "gpuName": "ANGLE (NVIDIA, NVIDIA GeForce RTX 5070 Ti Laptop GPU (0x00002F58) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    "resolution": [
+      1920,
+      1080
+    ],
+    "dpr": 1,
+    "cpu": {
+      "count": 169,
+      "p50": 4,
+      "p95": 5.5,
+      "over50": 0
+    },
+    "interval": {
+      "count": 168,
+      "p50": 52.79999999998836,
+      "p95": 82.39999999999418,
+      "over50": 86
+    },
+    "gpu": {
+      "count": 169,
+      "p50": 41.723136,
+      "p95": 53.286976,
+      "over50": 36
+    },
+    "atlasUploads": 151,
+    "memory": {
+      "geometries": 20,
+      "textures": 35
+    },
+    "programs": 39,
+    "cards": 219,
+    "calls": 624,
+    "triangles": 4045875,
+    "selectionCPU": {
+      "select": {
+        "count": 50,
+        "p50": 0.699999988079071,
+        "p95": 1.100000023841858,
+        "over50": 0
+      },
+      "drawLabel": {
+        "count": 50,
+        "p50": 0.19999998807907104,
+        "p95": 0.30000001192092896,
+        "over50": 0
+      },
+      "setCardStyle": {
+        "count": 50,
+        "p50": 0.09999999403953552,
+        "p95": 0.20000001788139343,
+        "over50": 0
+      }
+    }
+  },
+  {
+    "pass": 3,
+    "cover": true,
+    "warm": true,
+    "gpuName": "ANGLE (NVIDIA, NVIDIA GeForce RTX 5070 Ti Laptop GPU (0x00002F58) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    "resolution": [
+      1920,
+      1080
+    ],
+    "dpr": 1,
+    "cpu": {
+      "count": 172,
+      "p50": 4,
+      "p95": 6.100000023841858,
+      "over50": 0
+    },
+    "interval": {
+      "count": 171,
+      "p50": 47.10000000000582,
+      "p95": 93.79999999998836,
+      "over50": 76
+    },
+    "gpu": {
+      "count": 172,
+      "p50": 41.2128,
+      "p95": 52.633216,
+      "over50": 36
+    },
+    "atlasUploads": 160,
+    "memory": {
+      "geometries": 20,
+      "textures": 35
+    },
+    "programs": 39,
+    "cards": 218,
+    "calls": 624,
+    "triangles": 4033457,
+    "selectionCPU": {
+      "select": {
+        "count": 50,
+        "p50": 0.7999999821186066,
+        "p95": 1.0999999940395355,
+        "over50": 0
+      },
+      "drawLabel": {
+        "count": 50,
+        "p50": 0.19999998807907104,
+        "p95": 0.29999998211860657,
+        "over50": 0
+      },
+      "setCardStyle": {
+        "count": 50,
+        "p50": 0.09999999403953552,
+        "p95": 0.20000001788139343,
+        "over50": 0
+      }
+    }
+  },
+  {
+    "pass": 3,
+    "cover": false,
+    "warm": false,
+    "gpuName": "ANGLE (NVIDIA, NVIDIA GeForce RTX 5070 Ti Laptop GPU (0x00002F58) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    "resolution": [
+      1920,
+      1080
+    ],
+    "dpr": 1,
+    "cpu": {
+      "count": 1132,
+      "p50": 3.5,
+      "p95": 5.300000011920929,
+      "over50": 3
+    },
+    "interval": {
+      "count": 1131,
+      "p50": 5.899999999994179,
+      "p95": 11.60000000000582,
+      "over50": 4
+    },
+    "gpu": {
+      "count": 1128,
+      "p50": 5.758912,
+      "p95": 6.758688,
+      "over50": 3
+    },
+    "atlasUploads": 0,
+    "memory": {
+      "geometries": 20,
+      "textures": 31
+    },
+    "programs": 49,
+    "cards": 221,
+    "calls": 888,
+    "triangles": 7019821,
+    "selectionCPU": {
+      "select": {
+        "count": 49,
+        "p50": 0.7000000178813934,
+        "p95": 1.0999999940395355,
+        "over50": 0
+      },
+      "drawLabel": {
+        "count": 49,
+        "p50": 0.10000002384185791,
+        "p95": 0.30000001192092896,
+        "over50": 0
+      },
+      "setCardStyle": {
+        "count": 49,
+        "p50": 0,
+        "p95": 0.10000002384185791,
+        "over50": 0
+      }
+    }
+  },
+  {
+    "pass": 3,
+    "cover": false,
+    "warm": true,
+    "gpuName": "ANGLE (NVIDIA, NVIDIA GeForce RTX 5070 Ti Laptop GPU (0x00002F58) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    "resolution": [
+      1920,
+      1080
+    ],
+    "dpr": 1,
+    "cpu": {
+      "count": 1223,
+      "p50": 3.4000000059604645,
+      "p95": 5,
+      "over50": 1
+    },
+    "interval": {
+      "count": 1222,
+      "p50": 5.899999999994179,
+      "p95": 6.19999999999709,
+      "over50": 1
+    },
+    "gpu": {
+      "count": 1218,
+      "p50": 5.727488,
+      "p95": 6.567456,
+      "over50": 0
+    },
+    "atlasUploads": 0,
+    "memory": {
+      "geometries": 20,
+      "textures": 31
+    },
+    "programs": 49,
+    "cards": 222,
+    "calls": 888,
+    "triangles": 7032421,
+    "selectionCPU": {
+      "select": {
+        "count": 50,
+        "p50": 0.5999999940395355,
+        "p95": 0.9000000059604645,
+        "over50": 0
+      },
+      "drawLabel": {
+        "count": 50,
+        "p50": 0.19999998807907104,
+        "p95": 0.20000001788139343,
+        "over50": 0
+      },
+      "setCardStyle": {
+        "count": 50,
+        "p50": 0,
+        "p95": 0.10000002384185791,
+        "over50": 0
+      }
+    }
+  }
+]
