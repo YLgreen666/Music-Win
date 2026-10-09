@@ -45,3 +45,13 @@
 核对 API Enhanced 主分支 server.js：原生支持 express.urlencoded 与 POST；实际以 application/x-www-form-urlencoded 调用二维码 key/create 均返回 HTTP 200、code 200、合法 PNG data URL，并允许测试站点 Origin。
 
 播放器改为普通表单 POST，保留 mode:cors、credentials:omit、noCookie、请求体凭据和独立缓存标记；不使用 no-cors、JSONP 或服务端代理，不放宽 API 的跨域权限。该请求格式无需 JSON 类型触发的 OPTIONS 预检。31 项测试通过，新增中文及凭据特殊字符编码、无凭据 URL、请求头兼容性验证。用户 Edge 实际扫码结果仍待复测。
+
+## 原生 fetch 调用上下文修复（2026-10-09）
+
+用户复测仍在二维码出现前收到 NeteaseConnectionError，但同一浏览器直接打开 key 接口返回 code 200。真实 Chromium 浏览器的本地复现确认：把原生 Window.fetch 保存在类属性中，再通过 this.fetcher 调用，会在网络请求之前抛出 TypeError / Illegal invocation。此前错误处理将这一程序错误误标为连接失败，修改 JSON 为表单 POST 未解决此根因。
+
+构造时将 fetch 绑定至 globalThis，二维码、轮询、歌曲 API 和封面请求共用修复后的调用方式。新增默认 fetch 接收者回归测试，覆盖 key/create 和封面。32 项测试、TypeScript 与生产构建通过。
+
+浏览器复现页 verification/fetch-receiver.html 在本地 Vite 下打开并点击运行：原始对象调用仍显示 Illegal invocation；全局调用 HTTP 200；实际 provider.createQr 成功，两个调用的接收者均为 window。此页只使用内存中的虚构二维码数据和 data URL，不请求网易云、不访问账号凭据。修复前后对照来自同一浏览器与同一测试页，截图见 netease-fetch-receiver.png。真实网易云账号扫码确认仍需用户 Edge 复测。
+
+临时测试站已按用户要求撤销公开访问，本次只更新本地代码和构建，不重新部署或恢复公开访问。

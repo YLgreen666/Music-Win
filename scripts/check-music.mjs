@@ -155,6 +155,25 @@ test('online playback handles unavailable songs and trial permissions without pe
   provider.disconnect(); await assert.rejects(provider.resolveMedia(song), /扫码/); provider.dispose();
 });
 
+test('native-style fetch keeps the global receiver for default QR and cover requests', async () => {
+  const previous = globalThis.fetch, calls = [];
+  globalThis.fetch = function (url) {
+    assert.equal(this, globalThis, 'native fetch must not receive the provider as this');
+    const path = new URL(url).pathname; calls.push(path);
+    if (path === '/login/qr/key') return Promise.resolve(jsonResponse({ code: 200, data: { unikey: 'receiver-test-key' } }));
+    if (path === '/login/qr/create') return Promise.resolve(jsonResponse({ code: 200, data: { qrimg: 'data:image/png;base64,test' } }));
+    return Promise.resolve(new Response(new Blob(['test-cover'], { type: 'image/png' })));
+  };
+  let provider;
+  try { provider = new NeteaseMusicProvider('https://api.test', undefined, sessionStorageFake()); }
+  finally { globalThis.fetch = previous; }
+  try {
+    assert.equal((await provider.createQr()).key, 'receiver-test-key');
+    assert.equal((await provider.getCover({ ...neteaseTrack(cloudSong()), coverUrl: 'https://cover.test/cover.png' })).type, 'image/png');
+    assert.deepEqual(calls, ['/login/qr/key', '/login/qr/create', '/cover.png']);
+  } finally { provider.dispose(); }
+});
+
 test('form POST avoids preflight-triggering headers and preserves unicode and credential escaping', async () => {
   const cookie = 'MUSIC_U=test+token/%3D; flag=a=b&c#d', keywords = '周杰伦 稻香 / + % &';
   const provider = new NeteaseMusicProvider('https://api.test', async (url, options) => {

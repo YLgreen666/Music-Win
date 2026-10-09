@@ -1,0 +1,26 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>Fetch receiver regression</title><button id="run">运行浏览器请求验证</button><pre id="result">尚未运行</pre><script type="module">
+import { NeteaseMusicProvider } from '/src/music/netease.ts';
+const nativeFetch = window.fetch;
+const resource = 'data:application/json,%7B%22code%22%3A200%7D';
+document.querySelector('#run').onclick = async () => {
+ const output = [];
+ for (const [name, transport] of [['object receiver', { fetcher: nativeFetch }], ['global receiver', { fetcher: nativeFetch.bind(window) }]]) {
+  try { const response = await transport.fetcher(resource); output.push(name + ': HTTP ' + response.status); }
+  catch (error) { output.push(name + ': ' + error.name + ': ' + error.message); }
+ }
+ let receivers = [];
+ const original = window.fetch;
+ window.fetch = function(input, options) {
+  receivers.push(this === window ? 'window' : 'provider');
+  const body = new URL(input).pathname.endsWith('/create') ? {code:200,data:{qrimg:'data:image/png;base64,test'}} : {code:200,data:{unikey:'test-only-key'}};
+  return nativeFetch.call(this, 'data:application/json,' + encodeURIComponent(JSON.stringify(body)), options);
+ };
+ const provider = new NeteaseMusicProvider(location.origin, undefined, {getItem(){return null},setItem(){},removeItem(){}});
+ window.fetch = original;
+ try { await provider.createQr(); output.push('provider QR: PASS'); }
+ catch (error) { output.push('provider QR: ' + error.name + ': ' + error.message); }
+ finally { provider.dispose(); }
+ output.push('provider receivers: ' + receivers.join(', '));
+ document.querySelector('#result').textContent = output.join('\n');
+};
+</script></html>

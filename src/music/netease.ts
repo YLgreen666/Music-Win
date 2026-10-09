@@ -42,7 +42,9 @@ export class NeteaseMusicProvider extends EventTarget implements MusicProvider {
   private requestSequence = 0;
   private fetcher: typeof fetch;
   constructor(endpoint = NETEASE_API, fetcher: typeof fetch = fetch, storage?: StorageLike) {
-    super(); this.fetcher = fetcher; this.endpoint = endpoint.replace(/\/$/, ''); this.storageKey = `rhine-netease-session:${this.endpoint}`;
+    // Native Window.fetch requires its global receiver. Calling a stored copy
+    // as this.fetcher otherwise throws Illegal invocation before any request.
+    super(); this.fetcher = fetcher.bind(globalThis); this.endpoint = endpoint.replace(/\/$/, ''); this.storageKey = `rhine-netease-session:${this.endpoint}`;
     try { this.storage = storage ?? (typeof sessionStorage !== 'undefined' ? sessionStorage : undefined); const stored = JSON.parse(this.storage?.getItem(this.storageKey) || 'null'); if (stored && typeof stored.cookie === 'string' && typeof stored.uid === 'number' && typeof stored.nickname === 'string') this.session = stored; } catch { /* Storage may be disabled. */ }
   }
   get account() { return this.session ? { uid: this.session.uid, nickname: this.session.nickname } : undefined; }
