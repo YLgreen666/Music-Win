@@ -37,3 +37,11 @@
 - 移除仅用于缓存随机值的 `crypto.randomUUID` 依赖；只在 fetch 的 TypeError 时标记网络连接失败，准备请求失败、HTTP 错误和非 JSON 响应分别处理。原先整个请求中的 TypeError 都误归为“网络或跨域设置”。兼容性修订不代表已经定位用户浏览器的实际故障。
 - 扫码失败提供直接检查二维码接口的入口，仅包含公开路径、noCookie 和时间戳，不携带凭据。
 - `npm test` 30 项通过，TypeScript 和生产构建通过。真实浏览器核对新错误说明与检查链接，见 `netease-connection-diagnostic.png`。实际 Edge 扫码尚未确认恢复。
+
+### 普通表单 POST 修订
+
+用户随后确认：同一台 Edge 直接访问 `/login/qr/key` 返回 code 200 / data.unikey；排除该设备完全无法访问接口的情况，但尚不能断定预检就是实际失败原因。
+
+核对 API Enhanced 主分支 server.js：原生支持 express.urlencoded 与 POST；实际以 application/x-www-form-urlencoded 调用二维码 key/create 均返回 HTTP 200、code 200、合法 PNG data URL，并允许测试站点 Origin。
+
+播放器改为普通表单 POST，保留 mode:cors、credentials:omit、noCookie、请求体凭据和独立缓存标记；不使用 no-cors、JSONP 或服务端代理，不放宽 API 的跨域权限。该请求格式无需 JSON 类型触发的 OPTIONS 预检。31 项测试通过，新增中文及凭据特殊字符编码、无凭据 URL、请求头兼容性验证。用户 Edge 实际扫码结果仍待复测。

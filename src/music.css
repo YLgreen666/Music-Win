@@ -169,6 +169,7 @@ html[data-music-reduced="true"] .music-toast { transition: none; }
 .cloud-toolbar, .cloud-results-heading { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 22px; font-size: 12px; color: var(--theme-muted); }
 .cloud-toolbar > div { display: flex; flex-wrap: wrap; gap: 18px; }
 .cloud-toolbar button, .cloud-more { min-height: 44px; border-bottom: 1px solid var(--theme-line); color: var(--theme-ink); }
+.cloud-connection-check { color: var(--theme-ink); text-underline-offset: 4px; }
 .cloud-login { display: flex; align-items: center; gap: 34px; padding: 20px 0; font-size: 15px; line-height: 1.8; }
 .cloud-login img { width: 240px; height: 240px; background: #fff; image-rendering: pixelated; flex-shrink: 0; }
 #cloud-login-status { color: var(--theme-accent); font-weight: 600; }

@@ -59,10 +59,16 @@ export class NeteaseMusicProvider extends EventTarget implements MusicProvider {
       // This is a cache nonce, not a security token. Avoid requiring randomUUID
       // on older browsers, where its TypeError used to look like a network failure.
       const requestUrl = `${this.endpoint}${path}?timestamp=${Date.now()}&requestId=${this.requestPrefix}-${++this.requestSequence}`;
-      const bodyText = JSON.stringify({ ...params, noCookie: true, ...(cookie ? { cookie } : {}) });
+      // The API accepts URL-encoded POST bodies. This uses a CORS-safelisted
+      // content type, so QR generation needs no extra OPTIONS request.
+      const form = new URLSearchParams();
+      for (const [key, value] of Object.entries({ ...params, noCookie: true, ...(cookie ? { cookie } : {}) })) {
+        const serialized = typeof value === 'string' ? value : JSON.stringify(value);
+        if (serialized !== undefined) form.set(key, serialized);
+      }
       let response: Response;
       try {
-        response = await this.fetcher(requestUrl, { method: 'POST', mode: 'cors', credentials: 'omit', cache: 'no-store', headers: { 'Content-Type': 'application/json' }, body: bodyText, signal: controller.signal });
+        response = await this.fetcher(requestUrl, { method: 'POST', mode: 'cors', credentials: 'omit', cache: 'no-store', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: form.toString(), signal: controller.signal });
       } catch (error) {
         if (!controller.signal.aborted && error instanceof TypeError) throw new NeteaseConnectionError(this.endpoint, path);
         throw error;

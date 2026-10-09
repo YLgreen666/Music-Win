@@ -132,7 +132,7 @@ test('online IDs, albums and duration are stable across API shapes and do not me
 test('QR login and refresh use private POST credentials, fresh requests and a tab-scoped session', async () => {
   const storage = sessionStorageFake(), calls = [];
   const fetcher = async (url, options) => {
-    const path = new URL(url).pathname, body = JSON.parse(options.body); calls.push({ url, options, body });
+    const path = new URL(url).pathname, body = Object.fromEntries(new URLSearchParams(options.body)); calls.push({ url, options, body });
     if (path === '/login/qr/key') return jsonResponse({ code: 200, data: { unikey: 'qr-key' } });
     if (path === '/login/qr/create') return jsonResponse({ code: 200, data: { qrimg: 'data:image/png;base64,test' } });
     if (path === '/login/qr/check') return jsonResponse({ code: 803, cookie: 'MUSIC_U=private-token' });
@@ -140,7 +140,7 @@ test('QR login and refresh use private POST credentials, fresh requests and a ta
   };
   const provider = new NeteaseMusicProvider('https://api.test', fetcher, storage);
   const qr = await provider.createQr(); assert.equal(await provider.checkQr(qr.key), 803); assert.equal(provider.account.uid, 8);
-  assert.ok(calls.every(call => call.options.method === 'POST' && call.options.credentials === 'omit' && call.options.cache === 'no-store' && call.body.noCookie));
+  assert.ok(calls.every(call => call.options.method === 'POST' && call.options.credentials === 'omit' && call.options.cache === 'no-store' && call.body.noCookie === 'true'));
   assert.ok(calls.every(call => !call.url.includes('private-token'))); assert.equal(calls.at(-1).body.cookie, 'MUSIC_U=private-token');
   const restored = new NeteaseMusicProvider('https://api.test', fetcher, storage); assert.equal(await restored.restoreSession(), true);
   restored.disconnect(); assert.equal(storage.items.size, 0); assert.equal(restored.account, undefined);
@@ -153,6 +153,21 @@ test('online playback handles unavailable songs and trial permissions without pe
   const song = neteaseTrack(cloudSong(42)); await assert.rejects(provider.resolveMedia(song), /暂无/); assert.equal(song.playbackNotice, '暂无可播放资源');
   playable = true; const resource = await provider.resolveMedia(song); assert.equal(resource.crossOrigin, 'anonymous'); assert.match(resource.notice, /试听/); assert.equal(resource.url, 'https://m801.music.126.net/song.mp3'); assert.equal(song.url, undefined);
   provider.disconnect(); await assert.rejects(provider.resolveMedia(song), /扫码/); provider.dispose();
+});
+
+test('form POST avoids preflight-triggering headers and preserves unicode and credential escaping', async () => {
+  const cookie = 'MUSIC_U=test+token/%3D; flag=a=b&c#d', keywords = '周杰伦 稻香 / + % &';
+  const provider = new NeteaseMusicProvider('https://api.test', async (url, options) => {
+    assert.deepEqual(options.headers, { 'Content-Type': 'application/x-www-form-urlencoded' });
+    assert.equal(options.mode, 'cors'); assert.equal(options.credentials, 'omit');
+    assert.equal(options.method, 'POST'); assert.equal(options.cache, 'no-store');
+    const body = new URLSearchParams(options.body);
+    assert.equal(body.get('cookie'), cookie); assert.equal(body.get('keywords'), keywords);
+    assert.equal(body.get('noCookie'), 'true'); assert.equal(body.get('limit'), '30'); assert.equal(body.has('unused'), false);
+    assert.equal(new URL(url).searchParams.has('cookie'), false); assert.equal(url.includes('MUSIC_U'), false);
+    return jsonResponse({ code: 200 });
+  }, sessionStorageFake());
+  await provider.request('/cloudsearch', { keywords, limit: 30, unused: undefined }, undefined, cookie); provider.dispose();
 });
 
 test('network rejection is distinct from request setup, HTTP failures and HTML responses', async () => {
@@ -183,8 +198,8 @@ test('late credential errors cannot disconnect a newly scanned account and reque
 test('playlist pagination keeps server order, stable identities and complete batches beyond 1000 songs', async () => {
   const ids = Array.from({ length: 1003 }, (_, id) => id + 1), calls = [];
   const provider = loggedProvider(async (url, options) => {
-    const path = new URL(url).pathname, params = JSON.parse(options.body); calls.push({ path, params });
-    if (path === '/user/playlist') return jsonResponse({ code: 200, playlist: [{ id: params.offset + 1, name: 'List', trackCount: ids.length }], more: params.offset === 0 });
+    const path = new URL(url).pathname, params = Object.fromEntries(new URLSearchParams(options.body)); calls.push({ path, params });
+    if (path === '/user/playlist') return jsonResponse({ code: 200, playlist: [{ id: Number(params.offset) + 1, name: 'List', trackCount: ids.length }], more: params.offset === '0' });
     if (path === '/playlist/detail') return jsonResponse({ code: 200, playlist: { name: 'Long List', trackIds: ids.map(id => ({ id })) } });
     return jsonResponse({ code: 200, songs: params.ids.split(',').reverse().map(id => cloudSong(Number(id))) });
   });

@@ -23,7 +23,7 @@ export class NeteasePanel {
   private connectionHelp(error: unknown) {
     if (!(error instanceof NeteaseConnectionError)) return '';
     const url = new URL('/login/qr/key', this.library.netease.endpoint); url.searchParams.set('noCookie', 'true'); url.searchParams.set('timestamp', String(Date.now()));
-    return `<p class="help-note">二维码还未生成。可先在当前浏览器直接检查接口是否能打开，再返回重试。</p><p><a href="${esc(url.href)}" target="_blank" rel="noopener noreferrer">打开二维码接口检查 ↗</a></p>`;
+    return `<p class="help-note">二维码还未生成。可先在当前浏览器直接检查接口是否能打开，再返回重试。</p><p><a class="cloud-connection-check" href="${esc(url.href)}" target="_blank" rel="noopener noreferrer">打开二维码接口检查 ↗</a></p>`;
   }
   private header() {
     const account = this.library.netease.account;
