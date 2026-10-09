@@ -227,6 +227,7 @@ export class ArchiveScene {
   private borderColors?: THREE.InstancedBufferAttribute;
   private borderUpdates?: InstanceUpdates;
   private coverStyle = false;
+  refreshMusicAssets() { this.renderState.invalidate(); }
   private musicTrackForModel?: Track;
   setCardStyle(cover: boolean) {
     this.coverStyle = cover;

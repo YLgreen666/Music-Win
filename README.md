@@ -1,4 +1,4 @@
-# RHINE LAB · 本地音乐播放器
+# RHINE LAB · 音乐播放器
 
 基于 [LBEILC / RhineLabUI](https://github.com/LBEILC/RhineLabUI) 提交 `af8563bbc7ee60ffdad5635fec91e9ba7cc93a47` 的网页音乐播放器。保留原品牌、MiSans、完整开场、玻璃阵列、抽取、解密与 360° 查看器。使用 TypeScript、Three.js、Vite，没有引入前端框架。
 
@@ -33,6 +33,14 @@ npm run preview -- --port 4173
 
 ## 使用
 
+右上「网易云」连接独立服务 `https://wy-yapi-enhanced.vercel.app`。点击「扫码登录」，用网易云音乐 App 扫码并确认；然后搜索歌曲，点击播放、读取卡片或加入队列。搜索支持加载更多，在线歌曲与本地歌曲使用同一个队列、收藏和本地歌单。
+
+「我的网易云歌单」可同步为阵列中的只读歌单列。歌单管理提供重新同步、浏览、播放、复制为本地歌单和移除本地索引；本地操作不修改网易云账号里的歌单。再次同步更新同一个歌单和歌曲 ID，不创建重复项；歌单分页读取，千首歌单分批获取歌曲信息。
+
+登录凭据仅保存在当前标签页的 sessionStorage，刷新时验证恢复，关闭标签页后重新扫码；「退出连接」清除本站的登录凭据。接口请求通过 POST 携带凭据，不放进 URL、Git 或音乐库索引。歌曲元数据、封面缩略图和歌词保存于 IndexedDB，临时播放地址每次播放重新获取。已下架或无播放权限的歌曲显示不可播放，自动连续播放会跳过；试听资源明确提示。
+
+歌曲音频直接从网易云服务器加载，不经过 Vercel API 转发。在线播放需要网络；没有后台 Node API 进程，只有原有的 Vite 开发/预览服务。封面只对当前可见卡片及所选/播放歌曲请求，同时最多四个封面连接，离开视口取消请求。浏览器不允许音频跨域或无法解码时显示失败原因，不会静默播放无声音频。
+
 “专辑／歌单”切换浏览列。左右切列，上下切歌，支持拖动惯性、滚轮和方向键，并记住当前会话每列选曲。空歌单可在管理界面添加歌曲，加入歌曲后出现在阵列。
 
 点击卡片只选择，Enter 或 ACCESS TRACK 读取详情；明确点击播放按钮才播放。浏览与播放状态独立，返回、切换外观和查看模型持续保留音频。点击播放条歌曲标题可回到正在播放歌曲的详情。
@@ -49,7 +57,7 @@ npm run preview -- --port 4173
 
 运行生产预览或 HTTPS 生产站点，等待设置显示“离线资源已就绪”。Chrome / Edge 可通过地址栏安装图标或浏览器菜单安装；可用时设置也显示安装入口。开发模式不注册离线缓存。
 
-仅缓存界面、字体、模型和解析 Worker 等应用资源，不缓存导入音频。离线播放仍需要原文件和读取权限。新版本等待用户在设置点击“更新并重启”，不会主动重载播放页面。
+仅缓存界面、字体、模型和解析 Worker 等应用资源，不缓存导入音频、网易云 API、账号请求或在线音频。离线播放仍需要原文件和读取权限。新版本等待用户在设置点击“更新并重启”，不会主动重载播放页面。
 
 ## 扩展与工程结构
 
@@ -60,11 +68,12 @@ npm run preview -- --port 4173
 | `src/music/library.ts`、`database.ts` | 导入、歌单、收藏、IndexedDB、权限恢复 |
 | `src/music/metadata-worker.ts` | music-metadata 浏览器解析与封面缩略图 |
 | `src/music/player.ts` | 独立 HTMLAudioElement、队列、Web Audio、Media Session |
+| `src/music/netease.ts`、`netease-panel.ts`、`providers.ts` | 网易云 API、扫码登录、搜索、只读歌单及混合队列来源分发 |
 | `src/data.ts` | 以稳定歌曲 ID 连接场景列与音乐库 |
 | `src/music/cover-layer.ts` | 固定内存的封面图集及查看器封面 |
 | `scripts/check-music.mjs` | 阵列、队列、LRC、文件访问、导入与恢复测试 |
 
-首版只实现本地来源。桌面宿主可替换 FileAccessAdapter；第三方平台可实现 MusicProvider 的查询、播放资源、封面和歌词接口。平台登录、接口服务与桌面安装包留到后续阶段。
+当前实现本地与网易云来源，网易云使用用户独立部署的 [API Enhanced](https://github.com/NeteaseCloudMusicApiEnhanced/api-enhanced)。桌面宿主可替换 FileAccessAdapter；其他第三方平台可实现 MusicProvider 的查询、播放资源、封面和歌词接口。桌面安装包与远程歌单写入不属于当前版本。
 
 运行 `npm run test:fixtures` 在忽略目录 `.cache/music-fixtures` 生成原创合成 WAV、标签、封面、LRC 与损坏音频样本。真实浏览器回归记录见 [verification/MUSIC-PLAYER.md](verification/MUSIC-PLAYER.md)。
 

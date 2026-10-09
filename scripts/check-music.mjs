@@ -11,6 +11,8 @@ import { MusicLibrary } from '../src/music/library.ts';
 import { PageLifecycle } from '../src/music/lifecycle.ts';
 import { coverFrame, coverCrop, dominantCoverColor, placeholderColor } from '../src/music/cover-design.ts';
 import { setCoverSurface, coverSurfaceState } from '../src/music/card-appearance.ts';
+import { NeteaseMusicProvider, neteaseTrack, secureMediaUrl } from '../src/music/netease.ts';
+import { MusicProviders } from '../src/music/providers.ts';
 import * as THREE from 'three';
 
 test('cover frame leaves equal narrow margins and crops without stretching the source', () => {
@@ -112,6 +114,94 @@ class FakeAudio extends EventTarget {
 }
 const state = () => ({ queue: [], currentEntryId: null, position: 0, volume: .75, mode: 'sequence' });
 const tick = () => new Promise(resolve => setImmediate(resolve));
+
+const sessionStorageFake = () => { const items = new Map(); return { getItem: key => items.get(key) || null, setItem: (key, value) => items.set(key, value), removeItem: key => items.delete(key), items }; };
+const jsonResponse = body => new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } });
+const cloudSong = id => ({ id, name: `Cloud ${id}`, ar: [{ name: 'Singer A' }, { name: 'Singer B' }], al: { id: 7, name: 'Cloud Album', picUrl: 'http://p1.music.126.net/cover.jpg' }, dt: 60000 });
+const loggedProvider = (fetcher, storage = sessionStorageFake()) => { storage.setItem('rhine-netease-session:https://api.test', JSON.stringify({ cookie: 'MUSIC_U=test-session', uid: 8, nickname: 'Test' })); return new NeteaseMusicProvider('https://api.test', fetcher, storage); };
+
+test('online IDs, albums and duration are stable across API shapes and do not merge with local albums', () => {
+  const song = neteaseTrack(cloudSong(42));
+  assert.equal(song.id, 'netease:42'); assert.equal(song.duration, 60); assert.equal(song.artist, 'Singer A / Singer B'); assert.equal(song.coverUrl, 'https://p1.music.126.net/cover.jpg');
+  assert.equal(secureMediaUrl('javascript:alert(1)'), undefined);
+  const other = neteaseTrack({ id: 43, name: 'Legacy', artists: [{ name: 'Guest' }], album: { id: 7, name: 'Cloud Album' }, duration: 30000 });
+  const groups = albumCollections([song, other, track('local', { album: 'Cloud Album', artist: song.artist })]);
+  assert.equal(groups.length, 2); assert.deepEqual(groups.find(list => list.id === 'album:netease:7').trackIds.sort(), ['netease:42', 'netease:43']);
+});
+
+test('QR login and refresh use private POST credentials, fresh requests and a tab-scoped session', async () => {
+  const storage = sessionStorageFake(), calls = [];
+  const fetcher = async (url, options) => {
+    const path = new URL(url).pathname, body = JSON.parse(options.body); calls.push({ url, options, body });
+    if (path === '/login/qr/key') return jsonResponse({ code: 200, data: { unikey: 'qr-key' } });
+    if (path === '/login/qr/create') return jsonResponse({ code: 200, data: { qrimg: 'data:image/png;base64,test' } });
+    if (path === '/login/qr/check') return jsonResponse({ code: 803, cookie: 'MUSIC_U=private-token' });
+    return jsonResponse({ data: { code: 200, account: { id: 8 }, profile: { nickname: 'Tester' } } });
+  };
+  const provider = new NeteaseMusicProvider('https://api.test', fetcher, storage);
+  const qr = await provider.createQr(); assert.equal(await provider.checkQr(qr.key), 803); assert.equal(provider.account.uid, 8);
+  assert.ok(calls.every(call => call.options.method === 'POST' && call.options.credentials === 'omit' && call.options.cache === 'no-store' && call.body.noCookie));
+  assert.ok(calls.every(call => !call.url.includes('private-token'))); assert.equal(calls.at(-1).body.cookie, 'MUSIC_U=private-token');
+  const restored = new NeteaseMusicProvider('https://api.test', fetcher, storage); assert.equal(await restored.restoreSession(), true);
+  restored.disconnect(); assert.equal(storage.items.size, 0); assert.equal(restored.account, undefined);
+  provider.dispose(); restored.dispose();
+});
+
+test('online playback handles unavailable songs and trial permissions without persisting expiring URLs', async () => {
+  let playable = false;
+  const provider = loggedProvider(async () => jsonResponse({ code: 200, data: [{ code: playable ? 200 : 404, url: playable ? 'http://m801.music.126.net/song.mp3' : null, freeTrialInfo: playable ? { start: 0, end: 30 } : null }] }));
+  const song = neteaseTrack(cloudSong(42)); await assert.rejects(provider.resolveMedia(song), /暂无/); assert.equal(song.playbackNotice, '暂无可播放资源');
+  playable = true; const resource = await provider.resolveMedia(song); assert.equal(resource.crossOrigin, 'anonymous'); assert.match(resource.notice, /试听/); assert.equal(resource.url, 'https://m801.music.126.net/song.mp3'); assert.equal(song.url, undefined);
+  provider.disconnect(); await assert.rejects(provider.resolveMedia(song), /扫码/); provider.dispose();
+});
+
+test('late credential errors cannot disconnect a newly scanned account and requests are canceled on disposal', async () => {
+  let failOld;
+  const provider = loggedProvider((url, options) => new Promise((resolve, reject) => { failOld = () => resolve(jsonResponse({ code: 301 })); options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true }); }));
+  const pending = provider.request('/lyric'); await tick(); provider.disconnect();
+  provider.session = { cookie: 'MUSIC_U=new', uid: 9, nickname: 'New' }; provider.sessionRevision++;
+  failOld(); await assert.rejects(pending, /登录已失效/); assert.equal(provider.account.uid, 9);
+  const canceled = provider.request('/cloudsearch'); await tick(); provider.dispose(); await assert.rejects(canceled, { name: 'AbortError' });
+});
+
+test('playlist pagination keeps server order, stable identities and complete batches beyond 1000 songs', async () => {
+  const ids = Array.from({ length: 1003 }, (_, id) => id + 1), calls = [];
+  const provider = loggedProvider(async (url, options) => {
+    const path = new URL(url).pathname, params = JSON.parse(options.body); calls.push({ path, params });
+    if (path === '/user/playlist') return jsonResponse({ code: 200, playlist: [{ id: params.offset + 1, name: 'List', trackCount: ids.length }], more: params.offset === 0 });
+    if (path === '/playlist/detail') return jsonResponse({ code: 200, playlist: { name: 'Long List', trackIds: ids.map(id => ({ id })) } });
+    return jsonResponse({ code: 200, songs: params.ids.split(',').reverse().map(id => cloudSong(Number(id))) });
+  });
+  assert.equal((await provider.playlists()).length, 2);
+  const result = await provider.readPlaylist('77'); assert.equal(result.tracks.length, 1003); assert.equal(result.tracks[0].id, 'netease:1'); assert.equal(result.tracks.at(-1).id, 'netease:1003'); assert.equal(result.collection.id, 'netease-playlist:8:77'); assert.equal(result.collection.readOnly, true);
+  assert.equal(calls.filter(call => call.path === '/song/detail').length, 6); provider.dispose();
+});
+
+test('synced playlists update in place, remain read-only and survive restoration alongside local files', async () => {
+  const library = new MusicLibrary(), song = neteaseTrack(cloudSong(42)), list = { id: 'netease-playlist:8:77', name: 'Cloud List', kind: 'playlist', trackIds: [song.id], providerId: 'netease', sourceId: '77', accountId: '8', readOnly: true };
+  library.snapshot.tracks.push(track('local-file')); library.syncOnlinePlaylist([song], list); const identity = library.track(song.id);
+  identity.lyrics = '[00:01]Manual'; identity.cover = new Blob(['thumb'], { type: 'image/png' });
+  library.syncOnlinePlaylist([neteaseTrack(cloudSong(42))], { ...list, name: 'Renamed' }); assert.equal(library.tracks.length, 2); assert.equal(library.track(song.id), identity); assert.equal(identity.lyrics, '[00:01]Manual'); assert.ok(identity.cover);
+  library.renamePlaylist(list.id, 'Wrong'); library.addToPlaylist(list.id, ['local-file']); library.removeFromPlaylist(list.id, song.id); assert.equal(library.snapshot.playlists[0].name, 'Renamed'); assert.deepEqual(library.snapshot.playlists[0].trackIds, [song.id]);
+  await library.flush(); library.dispose(); const restored = new MusicLibrary(); await restored.initialize(); assert.equal(restored.track(song.id).availability, 'ready'); assert.equal(restored.track('local-file').availability, 'missing'); assert.equal(restored.snapshot.playlists[0].readOnly, true); restored.dispose();
+});
+
+test('mixed queues route each source and set CORS before online media loading, then restore paused', async () => {
+  const cloud = neteaseTrack(cloudSong(42)), local = track('local'), tracks = new Map([cloud, local].map(track => [track.id, track])), seen = [];
+  class CorsAudio extends FakeAudio { removeAttribute(name) { if (name === 'crossorigin') this.crossOrigin = null; else super.removeAttribute(name); } load() { if (this.src === 'cloud') assert.equal(this.crossOrigin, 'anonymous'); if (this.src === 'local') assert.equal(this.crossOrigin, null); super.load(); } }
+  const providers = new MusicProviders([{ id: 'local', resolveMedia: async track => { seen.push(track.providerId); return { url: 'local', release() {} }; } }, { id: 'netease', resolveMedia: async track => { seen.push(track.providerId); return { url: 'cloud', crossOrigin: 'anonymous', release() {} }; } }]);
+  const player = new MusicPlayer(state(), providers, id => tracks.get(id), new CorsAudio()); await player.playQueue([cloud.id, local.id], cloud.id); await player.advance(1); assert.deepEqual(seen, ['netease', 'local']);
+  const saved = structuredClone(player.state), restored = new MusicPlayer(saved, providers, id => tracks.get(id), new CorsAudio()); await restored.restore(); assert.equal(restored.playing, false); player.dispose(); restored.dispose();
+});
+
+test('cover requests use at most four connections and abort queued work when the viewport changes', async () => {
+  let active = 0, peak = 0; const releases = [];
+  const provider = new NeteaseMusicProvider('https://api.test', (url, options) => new Promise((resolve, reject) => { active++; peak = Math.max(peak, active); const cancel = () => { active--; reject(options.signal.reason); }; options.signal.addEventListener('abort', cancel, { once: true }); releases.push(() => { active--; options.signal.removeEventListener('abort', cancel); resolve(new Response(new Blob(['image'], { type: 'image/png' }))); }); }), sessionStorageFake());
+  const controller = new AbortController(); const canceled = provider.getCover(neteaseTrack(cloudSong(5)), controller.signal);
+  const first = [1, 2, 3].map(id => provider.getCover(neteaseTrack(cloudSong(id)))); await tick(); const queued = provider.getCover(neteaseTrack(cloudSong(6)), controller.signal); await tick(); assert.equal(peak, 4);
+  controller.abort(); await assert.rejects(canceled, { name: 'AbortError' }); await assert.rejects(queued, { name: 'AbortError' });
+  for (const release of releases.slice(1)) release(); await Promise.all(first); assert.equal(peak, 4); provider.dispose();
+});
 
 test('closing a page cancels rendering before one-time cleanup; cached pages can return', () => {
   const pending = new Map(); let id = 0, frames = 0, cleaned = 0;

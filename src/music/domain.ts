@@ -25,7 +25,7 @@ export function albumCollections(tracks: Track[]): Collection[] {
   const groups = new Map<string, Collection>();
   const trackMap = new Map(tracks.map(track => [track.id, track]));
   for (const track of tracks) {
-    const key = track.album ? `${track.albumArtist || track.artist}\u0000${track.album}` : `folder:${track.folder}`;
+    const key = track.providerId === 'netease' && track.albumId ? `netease:${track.albumId}` : track.album ? `${track.albumArtist || track.artist}\u0000${track.album}` : `folder:${track.folder}`;
     const id = `album:${key}`;
     let group = groups.get(id);
     if (!group) { group = { id, name: track.album || track.folder || '未命名专辑', kind: 'album', trackIds: [] }; groups.set(id, group); }

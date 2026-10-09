@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { Track } from './types.ts';
 import { coverFrame, coverCrop, dominantCoverColor, placeholderColor } from './cover-design';
+import { loadMusicCover } from './assets';
 type CoverInstance = { matrix: THREE.Matrix4; track?: Track };
 async function decodeCover(blob: Blob): Promise<{ image: CanvasImageSource; width: number; height: number; close(): void }> {
   try { const bitmap = await createImageBitmap(blob); return { image: bitmap, width: bitmap.width, height: bitmap.height, close: () => bitmap.close() }; }
@@ -22,6 +23,7 @@ export class MusicCoverLayer {
   private fallbackColor = new THREE.Color().setRGB(...placeholderColor, THREE.SRGBColorSpace);
   private uvSlots: THREE.InstancedBufferAttribute;
   private ticket = 0;
+  private loading = new Map<string, AbortController>();
   private placement = new THREE.Matrix4().makeTranslation(0, coverFrame.centerY, coverFrame.depth);
   private matrix = new THREE.Matrix4();
   private capacity = 512;
@@ -57,7 +59,15 @@ export class MusicCoverLayer {
   }
   private async paint(track: Track, slot: number) {
     this.colors.set(track.id, this.fallbackColor);
-    this.placeholder(slot, track.title); if (!track.cover) return;
+    this.placeholder(slot, track.title);
+    if (!track.cover && track.coverUrl) {
+      this.loading.get(track.id)?.abort(); const controller = new AbortController(); this.loading.set(track.id, controller);
+      try { await loadMusicCover(track, controller.signal); } catch { /* Offline covers keep the placeholder. */ }
+      if (this.loading.get(track.id) === controller) this.loading.delete(track.id);
+      if (controller.signal.aborted || this.slots.get(track.id) !== slot) return;
+      this.sources.set(track.id, track.cover);
+    }
+    if (!track.cover) return;
     const ticket = this.ticket;
     try {
       const bitmap = await decodeCover(track.cover);
@@ -71,14 +81,14 @@ export class MusicCoverLayer {
     } catch { /* A damaged cover keeps its placeholder. */ }
   }
   update(instances: CoverInstance[], enabled: boolean) {
-    this.mesh.visible = enabled; if (!enabled) { this.mesh.count = 0; return; }
+    this.mesh.visible = enabled; if (!enabled) { this.mesh.count = 0; for (const [id, request] of this.loading) { request.abort(); this.sources.delete(id); } this.loading.clear(); return; }
     const desired = new Map<string, Track>();
     for (const instance of instances) if (instance.track && desired.size < 63) desired.set(instance.track.id, instance.track);
-    for (const id of this.slots.keys()) if (!desired.has(id)) { this.slots.delete(id); this.sources.delete(id); this.colors.delete(id); }
+    for (const id of this.slots.keys()) if (!desired.has(id)) { this.loading.get(id)?.abort(); this.loading.delete(id); this.slots.delete(id); this.sources.delete(id); this.colors.delete(id); }
     const used = new Set(this.slots.values());
     for (const [id, track] of desired) {
       if (!this.slots.has(id)) { let slot = 1; while (used.has(slot)) slot++; this.slots.set(id, slot); used.add(slot); }
-      if (!this.sources.has(id) || this.sources.get(id) !== track.cover) { this.sources.set(id, track.cover); void this.paint(track, this.slots.get(id)!); }
+      if (!this.loading.has(id) && (!this.sources.has(id) || this.sources.get(id) !== track.cover)) { this.sources.set(id, track.cover); void this.paint(track, this.slots.get(id)!); }
     }
     if (instances.length > this.capacity) {
       this.capacity = Math.max(instances.length, this.capacity * 2);
@@ -117,5 +127,5 @@ export class MusicCoverLayer {
     context.drawImage(image, x, y, size, size, 0, 0, 32, 32);
     return new THREE.Color().setRGB(...dominantCoverColor(context.getImageData(0, 0, 32, 32).data), THREE.SRGBColorSpace);
   }
-  dispose() { this.ticket++; this.slots.clear(); this.sources.clear(); this.colors.clear(); this.texture.dispose(); this.mesh.dispose(); this.mesh.geometry.dispose(); (this.mesh.material as THREE.Material).dispose(); }
+  dispose() { this.ticket++; for (const request of this.loading.values()) request.abort(); this.loading.clear(); this.slots.clear(); this.sources.clear(); this.colors.clear(); this.texture.dispose(); this.mesh.dispose(); this.mesh.geometry.dispose(); (this.mesh.material as THREE.Material).dispose(); }
 }

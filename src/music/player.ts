@@ -11,6 +11,7 @@ export class MusicPlayer extends EventTarget {
   private loading = false;
   private playIntent = false;
   private cancelLoad?: () => void;
+  private resolveAbort?: AbortController;
   private context?: AudioContext;
   private analyser?: AnalyserNode;
   private source?: MediaElementAudioSourceNode;
@@ -133,7 +134,7 @@ export class MusicPlayer extends EventTarget {
   }
   stop() {
     this.playIntent = false;
-    ++this.generation; this.cancelLoad?.(); this.cancelLoad = undefined; this.loading = false;
+    ++this.generation; this.resolveAbort?.abort(); this.cancelLoad?.(); this.cancelLoad = undefined; this.loading = false;
     this.audio.pause(); this.audio.removeAttribute('src'); this.audio.load();
     this.resource?.release(); this.resource = undefined;
     this.state.currentEntryId = null; this.state.position = 0; this.notify(true);
@@ -159,11 +160,12 @@ export class MusicPlayer extends EventTarget {
       if (ended && this.state.mode === 'sequence' && candidate + direction >= this.state.queue.length) break;
       candidate = (candidate + (direction < 0 ? -1 : 1) + this.state.queue.length) % this.state.queue.length;
     }
-    this.audio.pause(); this.report('本轮队列没有可播放的歌曲，请恢复文件访问或检查音频格式。'); this.notify(true);
+    this.audio.pause(); this.playIntent = false; this.report('本轮队列没有可播放的歌曲，请检查文件访问、网易云登录或歌曲权限。'); this.notify(true);
   }
   private async loadEntry(entry: QueueEntry, play: boolean, position = 0): Promise<'ready' | 'failed' | 'superseded' | 'blocked'> {
     if (this.disposed) return 'superseded';
     const generation = ++this.generation;
+    this.resolveAbort?.abort(); this.resolveAbort = new AbortController();
     this.cancelLoad?.(); this.cancelLoad = undefined;
     this.loading = true; this.playIntent = play; this.audio.pause();
     this.resource?.release(); this.resource = undefined;
@@ -172,18 +174,20 @@ export class MusicPlayer extends EventTarget {
     let resource: MediaResource | undefined;
     try {
       const track = this.findTrack(entry.trackId); if (!track) throw new Error('歌曲已从音乐库移除');
-      resource = await this.provider.resolveMedia(track);
+      resource = await this.provider.resolveMedia(track, this.resolveAbort.signal);
       if (generation !== this.generation) { resource.release(); return 'superseded'; }
       this.resource = resource;
+      if (resource.notice) this.report(resource.notice);
       const metadataReady = new Promise<void>((resolve, reject) => {
         let timer: ReturnType<typeof setTimeout>;
         const cleanup = () => { clearTimeout(timer); this.audio.removeEventListener('loadedmetadata', loaded); this.audio.removeEventListener('error', failed); if (generation === this.generation) this.cancelLoad = undefined; };
         const loaded = () => { cleanup(); resolve(); };
-        const failed = () => { cleanup(); reject(new Error('音频无法解码，当前浏览器可能不支持这个格式')); };
+        const failed = () => { cleanup(); reject(new Error(track.providerId === 'netease' ? '在线音频加载失败，请检查网络、播放权限或音频跨域访问' : '音频无法解码，当前浏览器可能不支持这个格式')); };
         this.cancelLoad = () => { cleanup(); reject(new Error('播放请求已替换')); };
         this.audio.addEventListener('loadedmetadata', loaded); this.audio.addEventListener('error', failed);
         timer = setTimeout(() => { cleanup(); reject(new Error('音频加载超时')); }, 20000);
       });
+      if (resource.crossOrigin) this.audio.crossOrigin = resource.crossOrigin; else this.audio.removeAttribute('crossorigin');
       this.audio.src = resource.url; this.audio.load();
       await metadataReady;
       if (generation !== this.generation) return 'superseded';
@@ -203,6 +207,13 @@ export class MusicPlayer extends EventTarget {
       this.resource?.release(); this.resource = undefined;
       return 'failed';
     }
+  }
+  refreshMediaMetadata(trackId: string) {
+    if (this.disposed) return;
+    const entry = this.state.queue.find(item => item.id === this.state.currentEntryId);
+    if (entry?.trackId !== trackId) return;
+    const track = this.findTrack(trackId);
+    if (track) this.syncMediaMetadata(track);
   }
   private syncMediaMetadata(track: Track) {
     if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
@@ -235,7 +246,7 @@ export class MusicPlayer extends EventTarget {
     // Shutdown preserves the queue and resume position; stop() deliberately clears them.
     this.capturePosition();
     this.disposed = true; this.playIntent = false; ++this.generation;
-    this.events.abort(); this.cancelLoad?.(); this.cancelLoad = undefined; this.loading = false;
+    this.events.abort(); this.resolveAbort?.abort(); this.cancelLoad?.(); this.cancelLoad = undefined; this.loading = false;
     this.audio.pause(); this.audio.removeAttribute('src'); this.audio.load();
     this.resource?.release(); this.resource = undefined;
     this.source?.disconnect(); this.analyser?.disconnect();

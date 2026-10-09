@@ -15,6 +15,7 @@ export function settingsContent(p: MusicPreferences) {
     <label class="check-setting"><span>空闲背景配乐（播放歌曲时关闭）</span><input type="checkbox" data-preference="backgroundMusic" ${p.backgroundMusic ? 'checked' : ''}></label>
   </div>${qualityMarkup(p.rendering || qualityPresets[p.quality])}
   <div class="playlist-toolbar"><button data-action="replay">重播完整开场 ↗</button><button data-action="full-screen">全屏 ↗</button></div>
+  <section class="attribution"><h3>NETEASE CLOUD / 网易云音乐</h3><p>扫码连接后可搜索歌曲、同步只读歌单，与本地音乐混合播放。登录保存在当前标签页，关闭后重新扫码。</p><button data-action="netease">管理网易云连接 ↗</button></section>
   ${pwaSettingsMarkup()}
-  <section class="attribution"><h3>ABOUT / 来源与许可</h3><p>基于 LBEILC / RhineLabUI 的三维档案设计，源码基线 af8563bbc7ee。保留原品牌；音乐由本机文件提供。</p><a href="https://github.com/LBEILC/RhineLabUI" target="_blank" rel="noopener">原项目 ↗</a><a href="/licenses/rhine-lab.txt" target="_blank">MIT 许可 ↗</a><a href="/fonts/NOTICE.txt" target="_blank">字体说明 ↗</a><a href="/fonts/MiSans-license.pdf" target="_blank">MiSans 许可 ↗</a><a href="/licenses/rolling-number.txt" target="_blank">Rolling Number ↗</a></section>`;
+  <section class="attribution"><h3>ABOUT / 来源与许可</h3><p>基于 LBEILC / RhineLabUI 的三维档案设计，源码基线 af8563bbc7ee。保留原品牌；音乐来自本地文件或网易云账号授权资源。</p><a href="https://github.com/LBEILC/RhineLabUI" target="_blank" rel="noopener">原项目 ↗</a><a href="https://github.com/NeteaseCloudMusicApiEnhanced/api-enhanced" target="_blank" rel="noopener">网易云 API Enhanced ↗</a><a href="/licenses/rhine-lab.txt" target="_blank">MIT 许可 ↗</a><a href="/fonts/NOTICE.txt" target="_blank">字体说明 ↗</a><a href="/fonts/MiSans-license.pdf" target="_blank">MiSans 许可 ↗</a><a href="/licenses/rolling-number.txt" target="_blank">Rolling Number ↗</a></section>`;
 }

@@ -1,6 +1,8 @@
 import { MusicDatabase, defaultPlayback, defaultPreferences } from './database.ts';
 import { BrowserFileAccess, LocalMusicProvider } from './file-access.ts';
 import { albumCollections, reconcilePlayback } from './domain.ts';
+import { NeteaseMusicProvider } from './netease.ts';
+import { MusicProviders } from './providers.ts';
 import type { Collection, ImportItem, ImportProgress, LibrarySnapshot, Track } from './types.ts';
 
 type PickerWindow = Window & {
@@ -14,7 +16,8 @@ export const isAudioFile = (name: string) => audioPattern.test(name);
 export class MusicLibrary extends EventTarget {
   snapshot: LibrarySnapshot = { tracks: [], playlists: [], favorites: [], playback: defaultPlayback(), preferences: defaultPreferences() };
   readonly files = new BrowserFileAccess();
-  readonly provider = new LocalMusicProvider(() => this.snapshot.tracks, this.files);
+  readonly netease = new NeteaseMusicProvider();
+  readonly provider = new MusicProviders([new LocalMusicProvider(() => this.snapshot.tracks.filter(track => track.providerId === 'local'), this.files), this.netease]);
   private database = new MusicDatabase();
   private worker?: Worker;
   private parseRequest = 0;
@@ -31,7 +34,7 @@ export class MusicLibrary extends EventTarget {
     if (this.disposed) { this.database.close(); return; }
     this.snapshot = snapshot;
     this.roots = this.snapshot.roots ?? [];
-    await this.files.refreshAvailability(this.snapshot.tracks);
+    await this.files.refreshAvailability(this.snapshot.tracks.filter(track => track.providerId === 'local'));
     Object.assign(this.snapshot.playback, reconcilePlayback(this.snapshot.playback.queue, this.snapshot.playback.currentEntryId, new Set(this.snapshot.tracks.map(track => track.id))));
   }
   get tracks() { return this.snapshot.tracks; }
@@ -65,24 +68,25 @@ export class MusicLibrary extends EventTarget {
     this.disposed = true; clearTimeout(this.saveTimer); this.cancelImport();
     void this.flush().catch(() => {}).finally(() => this.database.close());
     this.files.temporary.clear();
+    this.netease.dispose();
   }
   createPlaylist(name: string) {
     const playlist: Collection = { id: crypto.randomUUID(), name: name.trim() || '新歌单', kind: 'playlist', trackIds: [] };
     this.snapshot.playlists.push(playlist); this.changed(); return playlist;
   }
-  renamePlaylist(id: string, name: string) { const list = this.snapshot.playlists.find(list => list.id === id); if (list && name.trim()) { list.name = name.trim(); this.changed(); } }
+  renamePlaylist(id: string, name: string) { const list = this.snapshot.playlists.find(list => list.id === id); if (list && !list.readOnly && name.trim()) { list.name = name.trim(); this.changed(); } }
   deletePlaylist(id: string) { this.snapshot.playlists = this.snapshot.playlists.filter(list => list.id !== id); this.changed(); }
   addToPlaylist(id: string, trackIds: string[]) {
     const list = this.snapshot.playlists.find(list => list.id === id);
-    if (!list) return;
+    if (!list || list.readOnly) return;
     list.trackIds = [...new Set([...list.trackIds, ...trackIds.filter(trackId => !!this.track(trackId))])]; this.changed();
   }
   removeFromPlaylist(id: string, trackId: string) {
-    const list = this.snapshot.playlists.find(list => list.id === id); if (!list) return;
+    const list = this.snapshot.playlists.find(list => list.id === id); if (!list || list.readOnly) return;
     list.trackIds = list.trackIds.filter(value => value !== trackId); this.changed();
   }
   moveInPlaylist(id: string, trackId: string, direction: number) {
-    const list = this.snapshot.playlists.find(list => list.id === id); if (!list) return;
+    const list = this.snapshot.playlists.find(list => list.id === id); if (!list || list.readOnly) return;
     const from = list.trackIds.indexOf(trackId), to = from + direction;
     if (from < 0 || to < 0 || to >= list.trackIds.length) return;
     [list.trackIds[from], list.trackIds[to]] = [list.trackIds[to], list.trackIds[from]]; this.changed();
@@ -100,6 +104,33 @@ export class MusicLibrary extends EventTarget {
     this.files.temporary.delete(id); this.changed();
   }
   setLyrics(id: string, lyrics: string) { const track = this.track(id); if (track) { track.lyrics = lyrics; this.changed(); } }
+  upsertOnlineTracks(tracks: Track[]) {
+    const existing = new Map(this.tracks.map(track => [track.id, track]));
+    for (const incoming of tracks) {
+      if (incoming.providerId !== 'netease') continue;
+      const previous = existing.get(incoming.id);
+      if (previous) Object.assign(previous, incoming, { cover: previous.coverUrl === incoming.coverUrl ? previous.cover : undefined, lyrics: previous.lyrics, playbackNotice: previous.playbackNotice });
+      else { this.snapshot.tracks.push(incoming); existing.set(incoming.id, incoming); }
+    }
+    this.changed();
+  }
+  syncOnlinePlaylist(tracks: Track[], collection: Collection) {
+    this.upsertOnlineTracks(tracks);
+    const previous = this.snapshot.playlists.find(list => list.id === collection.id);
+    if (previous) Object.assign(previous, collection); else this.snapshot.playlists.push(collection);
+    this.changed();
+  }
+  async ensureCover(track: Track, signal?: AbortSignal) {
+    if (track.cover || track.providerId === 'local') return track.cover;
+    const cover = await this.provider.getCover(track, signal);
+    if (!this.disposed && !signal?.aborted && cover && this.track(track.id) === track) { track.cover = cover; this.scheduleSave(); this.dispatchEvent(new CustomEvent('asset', { detail: { id: track.id, kind: 'cover' } })); }
+    return cover;
+  }
+  async ensureLyrics(track: Track, signal?: AbortSignal) {
+    if (track.lyrics !== undefined || track.providerId === 'local') return;
+    const lyrics = await this.provider.getLyrics(track, signal);
+    if (!this.disposed && !signal?.aborted && track.lyrics === undefined && this.track(track.id) === track) { track.lyrics = lyrics; this.scheduleSave(); this.dispatchEvent(new CustomEvent('asset', { detail: { id: track.id, kind: 'lyrics' } })); }
+  }
   async restoreAccess(track: Track) { const restored = await this.files.requestAccess(track); this.changed(); return restored; }
   async relink(id: string, file: File, handle?: FileSystemFileHandle) {
     const track = this.track(id); if (!track) return;

@@ -17,6 +17,9 @@ export interface Track {
   size: number;
   modified: number;
   cover?: Blob;
+  coverUrl?: string;
+  albumId?: string;
+  playbackNotice?: string;
   lyrics?: string;
   handle?: FileSystemFileHandle;
   rootId?: string;
@@ -28,6 +31,10 @@ export interface Collection {
   name: string;
   kind: 'album' | 'playlist' | 'builtin';
   trackIds: string[];
+  providerId?: string;
+  sourceId?: string;
+  accountId?: string;
+  readOnly?: boolean;
 }
 export interface QueueEntry { id: string; trackId: string }
 export interface PlaybackState {
@@ -59,13 +66,13 @@ export interface LibrarySnapshot {
   playback: PlaybackState;
   preferences: MusicPreferences;
 }
-export interface MediaResource { url: string; release(): void }
+export interface MediaResource { url: string; crossOrigin?: 'anonymous'; notice?: string; release(): void }
 export interface MusicProvider {
   readonly id: string;
-  search(query: string): Promise<Track[]>;
-  resolveMedia(track: Track): Promise<MediaResource>;
-  getCover(track: Track): Promise<Blob | undefined>;
-  getLyrics(track: Track): Promise<string | undefined>;
+  search(query: string, signal?: AbortSignal): Promise<Track[]>;
+  resolveMedia(track: Track, signal?: AbortSignal): Promise<MediaResource>;
+  getCover(track: Track, signal?: AbortSignal): Promise<Blob | undefined>;
+  getLyrics(track: Track, signal?: AbortSignal): Promise<string | undefined>;
 }
 export interface FileAccessAdapter {
   read(track: Track): Promise<File>;

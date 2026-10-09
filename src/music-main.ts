@@ -28,6 +28,8 @@ import { escapeHtml as esc } from './html';
 import { MusicLibrary } from './music/library';
 import { MusicPlayer } from './music/player';
 import { PageLifecycle } from './music/lifecycle';
+import { NeteasePanel } from './music/netease-panel';
+import { setMusicCoverLoader } from './music/assets';
 import { activeLyric, formatTime, matchesTrack, parseLrc } from './music/domain';
 import { archiveColumns, columnFiles, fileLocation, musicColumns, musicTrack, records, setMusicCatalog } from './data';
 import { wrap, type ArchiveNavigation } from './archive-loop';
@@ -36,10 +38,10 @@ import type { Collection, ImportItem, ImportProgress, LyricLine, PlaybackMode, T
 const $ = <T extends HTMLElement = HTMLElement>(selector: string) => document.querySelector<T>(selector)!;
 $('#stage').innerHTML = musicShell;
 $('#boot-background').insertAdjacentHTML('beforeend', '<div class="boot-white"></div>');
-$('.system-nav').innerHTML = `<button data-action="import" title="导入音乐">＋ <span>导入音乐</span></button><button data-action="search" title="搜索音乐 /">⌕ <span>MUSIC INDEX</span></button><button data-action="playlists" title="管理歌单">≡ <span>歌单</span></button><button data-action="settings" class="settings-button" aria-label="系统设置"><span class="settings-glyph">◷</span><span class="settings-label">设置</span></button>`;
+$('.system-nav').innerHTML = `<button data-action="import" title="导入音乐">＋ <span>导入音乐</span></button><button data-action="search" title="搜索音乐 /">⌕ <span>MUSIC INDEX</span></button><button data-action="netease" title="网易云音乐" aria-label="网易云音乐，扫码登录">♫ <span>网易云</span></button><button data-action="playlists" title="管理歌单">≡ <span>歌单</span></button><button data-action="settings" class="settings-button" aria-label="系统设置"><span class="settings-glyph">◷</span><span class="settings-label">设置</span></button>`;
 $('#stage').insertAdjacentHTML('beforeend', `
   <div class="collection-switch" role="group" aria-label="音乐库浏览方式"><button data-action="albums">专辑</button><i>／</i><button data-action="lists">歌单</button></div>
-  <section id="empty-library" class="empty-library" hidden><span>LOCAL MUSIC / INITIALIZE</span><h2>你的音乐，等待归档。</h2><p>导入音乐文件或文件夹，让玻璃阵列成为你的音乐库。</p><button data-action="import">导入音乐 <span>↗</span></button><small>音频保留在原位置 · 支持 MP3 / FLAC / M4A / WAV / OGG</small></section>
+  <section id="empty-library" class="empty-library" hidden><span>LOCAL MUSIC / INITIALIZE</span><h2>你的音乐，等待归档。</h2><p>导入音乐文件或文件夹，让玻璃阵列成为你的音乐库。</p><button data-action="import">导入音乐 <span>↗</span></button><button data-action="netease">连接网易云 <span>↗</span></button><small>音频保留在原位置 · 支持 MP3 / FLAC / M4A / WAV / OGG</small></section>
   <div id="fallback-note" hidden>三维场景暂不可用，音乐仍可通过索引列表播放。<button data-action="search">打开音乐列表 ↗</button></div>`);
 $('#viewport').insertAdjacentHTML('afterend', `
   <section id="player-bar" class="player-bar" aria-label="音乐播放控制">
@@ -75,7 +77,7 @@ const documentReveal = new DocumentDecryption();
 const detailTransition = new SurfaceTransition($('#detail-ui'), undefined, 180, 180);
 const tabTransition = new ContentTransition();
 const modalTransition = new SurfaceTransition($('#music-modal'), $('.music-panel'));
-let modalType: 'search' | 'import' | 'settings' | 'playlists' | 'playlist' | 'add-playlist' | 'queue' | null = null;
+let modalType: 'search' | 'import' | 'settings' | 'playlists' | 'playlist' | 'add-playlist' | 'queue' | 'netease' | null = null;
 let modalPlaylist: string | null = null;
 let modalTrackId: string | null = null;
 let previousFocus: HTMLElement | null = null;
@@ -90,6 +92,10 @@ let miniTrackId: string | undefined;
 let lyricLines: LyricLine[] = [];
 let lyricIndex = -2;
 let searchQuery = '';
+let detailAssetsAbort: AbortController | undefined;
+let playbackAssetsAbort: AbortController | undefined;
+const neteasePanel = new NeteasePanel(library, () => player, { open: (title, body) => openModal('netease', title, body), close: closeModal, show: showTrack, tell, active: () => modalType === 'netease' && !modalClosing && !lifecycle.closed });
+setMusicCoverLoader((track, signal) => library.ensureCover(track, signal));
 let lastFrame = 0;
 const pageEvents = new AbortController();
 const eventOptions = { signal: pageEvents.signal };
@@ -97,6 +103,7 @@ let pwaTimer: ReturnType<typeof setTimeout> | undefined;
 const lifecycle = new PageLifecycle(frame, () => {
   ready = false; started = false;
   pageEvents.abort(); clearTimeout(toastTimer); clearTimeout(pwaTimer);
+  neteasePanel.cancel(); detailAssetsAbort?.abort(); playbackAssetsAbort?.abort(); setMusicCoverLoader();
   modalTransition.dispose(); detailTransition.dispose(); tabTransition.cancel();
   titleRolling.destroy(); artistRolling.destroy(); selectedNumber.destroy(); columnNumber.destroy(); clock.dispose();
   // Stop rendering first, detach audio callbacks, then release GPU resources.
@@ -189,7 +196,7 @@ function updateSelection() {
   if (!scene && library.tracks.length && modalType === 'search') renderSearchResults();
 }
 function setMode(next: typeof mode) {
-  const previous = mode; mode = next; $('#stage').dataset.mode = next; $('#stage').dataset.boot = next === 'boot' ? 'access' : 'done';
+  const previous = mode; if (next !== 'detail') detailAssetsAbort?.abort(); mode = next; $('#stage').dataset.mode = next; $('#stage').dataset.boot = next === 'boot' ? 'access' : 'done';
   $('#boot').inert = next !== 'boot'; $('#boot').setAttribute('aria-hidden', String(next !== 'boot'));
   $('#archive-ui').inert = next !== 'archive' || !!modalType; $('#detail-ui').inert = next !== 'detail' || !!modalType;
   $('.system-nav').inert = next === 'boot' || !!modalType; $('.collection-switch').inert = next === 'boot' || !!modalType;
@@ -221,19 +228,21 @@ function showTrack(id: string) {
   if (index < 0) { prefs().collectionMode = 'albums'; syncCatalog(); index = records.findIndex(record => record.id === id); }
   if (index >= 0) { select(index); openTrack(); }
 }
-function trackRow(track: Track, context: 'search' | 'queue' | 'playlist', index: number, entryId?: string) {
+function trackRow(track: Track, context: 'search' | 'queue' | 'playlist' | 'cloud', index: number, entryId?: string) {
   const current = player?.currentTrack?.id === track.id;
-  return `<div class="music-row ${current ? 'is-playing' : ''}" data-track-row="${esc(track.id)}"><span class="row-index">${String(index + 1).padStart(2, '0')}</span><button class="row-track" data-action="${context === 'queue' ? 'play-entry' : 'show-track'}" data-id="${esc(entryId || track.id)}"><strong>${esc(track.title)}</strong><small>${esc(track.artist)} <i>／</i> ${esc(track.album || track.folder)}</small></button><span class="row-duration">${formatTime(track.duration)}</span><div class="row-actions">${context === 'search' ? `<button data-action="row-play" data-id="${esc(track.id)}" title="播放" aria-label="播放 ${esc(track.title)}">▷</button><button data-action="row-next" data-id="${esc(track.id)}" title="下一首播放">＋</button><button data-action="row-add" data-id="${esc(track.id)}" title="加入歌单">≡</button><button data-action="row-remove" data-id="${esc(track.id)}" title="从库移除，不删除文件">×</button>` : `<button data-action="${context}-up" data-id="${esc(entryId || track.id)}" aria-label="上移">↑</button><button data-action="${context}-down" data-id="${esc(entryId || track.id)}" aria-label="下移">↓</button><button data-action="${context}-remove" data-id="${esc(entryId || track.id)}" aria-label="移除">×</button>`}</div></div>`;
+  return `<div class="music-row ${current ? 'is-playing' : ''}" data-track-row="${esc(track.id)}"><span class="row-index">${String(index + 1).padStart(2, '0')}</span><button class="row-track" data-action="${context === 'queue' ? 'play-entry' : 'show-track'}" data-id="${esc(entryId || track.id)}"><strong>${esc(track.title)}</strong><small>${esc(track.artist)} <i>／</i> ${esc(track.album || track.folder)}</small></button><span class="row-duration">${formatTime(track.duration)}</span><div class="row-actions">${context === 'cloud' ? `<button data-action="cloud-list-play" data-id="${esc(track.id)}" aria-label="播放 ${esc(track.title)}">▷</button>` : context === 'search' ? `<button data-action="row-play" data-id="${esc(track.id)}" title="播放" aria-label="播放 ${esc(track.title)}">▷</button><button data-action="row-next" data-id="${esc(track.id)}" title="下一首播放">＋</button><button data-action="row-add" data-id="${esc(track.id)}" title="加入歌单">≡</button><button data-action="row-remove" data-id="${esc(track.id)}" title="从库移除，不删除文件">×</button>` : `<button data-action="${context}-up" data-id="${esc(entryId || track.id)}" aria-label="上移">↑</button><button data-action="${context}-down" data-id="${esc(entryId || track.id)}" aria-label="下移">↓</button><button data-action="${context}-remove" data-id="${esc(entryId || track.id)}" aria-label="移除">×</button>`}</div></div>`;
 }
 function renderDetail() {
   const track = selectedTrack(); if (!track) return;
+  detailAssetsAbort?.abort(); detailAssetsAbort = new AbortController();
+  loadTrackAssets(track, detailAssetsAbort.signal);
   if (detailCoverUrl) URL.revokeObjectURL(detailCoverUrl);
   detailCoverUrl = track.cover ? URL.createObjectURL(track.cover) : undefined;
   $('#object-id').textContent = `NO.${String(selected + 1).padStart(3, '0')}`;
   $('.object-caption small').innerHTML = 'DRAG TO INSPECT <span>↔</span>';
   $('.viewer-open').innerHTML = '360° 查看歌曲卡片 <span>↗</span>'; $('.viewer-open').hidden = !scene;
   const favorite = library.snapshot.favorites.includes(track.id);
-  $('#detail-content').innerHTML = `<div class="detail-kicker">LOCAL MUSIC <span>${esc(track.format)}</span></div><div class="song-heading"><div class="song-art">${detailCoverUrl ? `<img src="${detailCoverUrl}" alt="${esc(track.title)} 的封面">` : '<span>∞</span>'}</div><div><h2>${esc(track.title)}</h2><div class="detail-title-cn">${esc(track.artist)}</div><p>${esc(track.album || track.folder)}</p></div></div><dl class="metadata"><div><dt>DURATION / 时长</dt><dd>${formatTime(track.duration)}</dd></div><div><dt>COLLECTION / 当前列</dt><dd>${esc(currentCollection()?.name || '')}</dd></div><div><dt>SOURCE / 来源</dt><dd>本地文件 · ${track.availability === 'temporary' ? '本次打开有效' : track.availability === 'ready' ? '可读取' : '需要恢复访问'}</dd></div><div><dt>ARTIST / 歌手</dt><dd>${esc(track.artist)}</dd></div></dl><div class="song-actions"><button class="primary-action" data-action="play-selected">▷ 播放歌曲</button><button data-action="favorite" aria-pressed="${favorite}">${favorite ? '已收藏 ✓' : '＋ 收藏'}</button><button data-action="add-playlist">加入歌单</button><button data-action="enqueue">加入队列</button></div><nav class="detail-tabs" role="tablist" aria-label="歌曲详情"><button data-tab="lyrics" role="tab">01 歌词</button><button data-tab="info" role="tab">02 歌曲信息</button><button data-tab="collection" role="tab">03 当前专辑 / 歌单</button></nav><section id="tab-panel" class="tab-panel song-tab-panel" role="tabpanel"></section>`;
+  $('#detail-content').innerHTML = `<div class="detail-kicker">${track.providerId === 'netease' ? 'NETEASE CLOUD MUSIC' : 'LOCAL MUSIC'} <span>${esc(track.format)}</span></div><div class="song-heading"><div class="song-art">${detailCoverUrl ? `<img src="${detailCoverUrl}" alt="${esc(track.title)} 的封面">` : '<span>∞</span>'}</div><div><h2>${esc(track.title)}</h2><div class="detail-title-cn">${esc(track.artist)}</div><p>${esc(track.album || track.folder)}</p></div></div><dl class="metadata"><div><dt>DURATION / 时长</dt><dd>${formatTime(track.duration)}</dd></div><div><dt>COLLECTION / 当前列</dt><dd>${esc(currentCollection()?.name || '')}</dd></div><div><dt>SOURCE / 来源</dt><dd>${track.providerId === 'netease' ? esc(track.playbackNotice || '网易云在线歌曲') : `本地文件 · ${track.availability === 'temporary' ? '本次打开有效' : track.availability === 'ready' ? '可读取' : '需要恢复访问'}`}</dd></div><div><dt>ARTIST / 歌手</dt><dd>${esc(track.artist)}</dd></div></dl><div class="song-actions"><button class="primary-action" data-action="play-selected">▷ 播放歌曲</button><button data-action="favorite" aria-pressed="${favorite}">${favorite ? '已收藏 ✓' : '＋ 收藏'}</button><button data-action="add-playlist">加入歌单</button><button data-action="enqueue">加入队列</button></div><nav class="detail-tabs" role="tablist" aria-label="歌曲详情"><button data-tab="lyrics" role="tab">01 歌词</button><button data-tab="info" role="tab">02 歌曲信息</button><button data-tab="collection" role="tab">03 当前专辑 / 歌单</button></nav><section id="tab-panel" class="tab-panel song-tab-panel" role="tabpanel"></section>`;
   renderTab(); documentReveal.reset($('#detail-content'), prefs().reduced);
 }
 function renderTab() {
@@ -242,14 +251,20 @@ function renderTab() {
   const panel = $('#tab-panel'); panel.setAttribute('aria-label', activeTab === 'lyrics' ? '歌词' : activeTab === 'info' ? '歌曲信息' : '当前专辑或歌单');
   lyricLines = parseLrc(track.lyrics || ''); lyricIndex = -2;
   if (activeTab === 'lyrics') {
-    panel.innerHTML = `<div class="lyric-tools"><span>LYRICS / 歌词</span><button data-action="attach-lyrics">关联 LRC ↗</button></div><div class="lyrics-scroll">${lyricLines.length ? lyricLines.map((line, index) => `<button class="lyric-line" data-lyric="${index}">${esc(line.text || '♪')}</button>`).join('') : `<div class="lyric-empty"><strong>${track.lyrics ? '歌词没有时间标签' : '还没有歌词'}</strong><p>${track.lyrics ? esc(track.lyrics.replace(/\[[^\]]*\]/g, '').slice(0, 6000)).replace(/\n/g, '<br>') : '导入同名 LRC 文件，或手动关联歌词。'}</p></div>`}</div>`;
+    panel.innerHTML = `<div class="lyric-tools"><span>LYRICS / 歌词</span>${track.providerId === 'netease' ? '<button data-action="retry-cloud-lyrics">获取歌词 ↻</button>' : ''}<button data-action="attach-lyrics">关联 LRC ↗</button></div><div class="lyrics-scroll">${lyricLines.length ? lyricLines.map((line, index) => `<button class="lyric-line" data-lyric="${index}">${esc(line.text || '♪')}</button>`).join('') : `<div class="lyric-empty"><strong>${track.lyrics ? '歌词没有时间标签' : '还没有歌词'}</strong><p>${track.lyrics ? esc(track.lyrics.replace(/\[[^\]]*\]/g, '').slice(0, 6000)).replace(/\n/g, '<br>') : track.providerId === 'netease' ? (track.lyrics === undefined ? '正在获取网易云歌词，可点击重试；也可关联本地 LRC。' : '网易云未提供歌词，可关联本地 LRC。') : '导入同名 LRC 文件，或手动关联歌词。'}</p></div>`}</div>`;
     updateLyrics(true);
   } else if (activeTab === 'info') {
+    if (track.providerId === 'netease') { panel.innerHTML = `<dl class="track-info"><dt>来源</dt><dd>网易云音乐</dd><dt>歌曲 ID</dt><dd>${esc(track.sourceId)}</dd><dt>专辑</dt><dd>${esc(track.album)}</dd><dt>状态</dt><dd>${esc(track.playbackNotice || '播放时按当前账号权限获取音频')}</dd></dl><div class="info-actions"><button data-action="netease">网易云连接 ↗</button><button data-action="remove-selected">从库移除</button></div><p class="help-note">音频通过网易云地址直接播放。移除索引不修改网易云歌单。</p>`; tabTransition.reveal(panel, prefs().reduced); return; }
     panel.innerHTML = `<dl class="track-info"><dt>文件</dt><dd>${esc(track.fileName)}</dd><dt>目录</dt><dd>${esc(track.folder)}</dd><dt>格式</dt><dd>${esc(track.format)}</dd><dt>曲序</dt><dd>${track.trackNumber || '—'}</dd><dt>大小</dt><dd>${(track.size / 1048576).toFixed(2)} MB</dd></dl><div class="info-actions"><button data-action="restore-access">恢复访问 ↗</button><button data-action="relink">重新关联文件 ↗</button><button data-action="remove-selected">从库移除</button></div><p class="help-note">文件始终保留在原位置。从库中移除不会删除磁盘文件。</p>`;
   } else {
     const collection = currentCollection(); panel.innerHTML = `<div class="lyric-tools"><span>${esc(collection?.name || '')}</span><button data-action="play-collection">播放全部 ▷</button></div><div class="collection-tracks">${(collection?.trackIds || []).map((id, index) => { const song = library.track(id)!; return `<button data-action="detail-row-play" data-id="${esc(id)}" class="collection-track"><span>${String(index + 1).padStart(2, '0')}</span><strong>${esc(song.title)}</strong><small>${formatTime(song.duration)}</small></button>`; }).join('')}</div>`;
   }
   tabTransition.reveal(panel, prefs().reduced);
+}
+function loadTrackAssets(track: Track, signal: AbortSignal) {
+  if (track.providerId !== 'netease') return;
+  void library.ensureCover(track, signal).catch(() => {});
+  void library.ensureLyrics(track, signal).catch(error => { if (!signal.aborted && !lifecycle.closed && mode === 'detail' && selectedTrack()?.id === track.id) tell(error.message); });
 }
 function updateLyrics(force = false) {
   if (mode !== 'detail' || activeTab !== 'lyrics' || !lyricLines.length) return;
@@ -263,12 +278,14 @@ function updateLyrics(force = false) {
 }
 
 function openModal(type: NonNullable<typeof modalType>, title: string, body: string) {
+  if (type !== 'netease') neteasePanel.cancel();
   if (!modalType && !modalClosing) previousFocus = document.activeElement as HTMLElement;
   modalClosing = false; modalType = type; $('#modal-title').textContent = title; $('#modal-body').innerHTML = body;
   $('#stage').inert = true; $('#player-bar').inert = true; modalTransition.show(prefs().reduced); audio.play('page-open');
   requestAnimationFrame(() => { if (!lifecycle.closed) ($('#modal-body').querySelector<HTMLElement>('input:not([type="hidden"]),button,select') || $('.modal-close')).focus(); });
 }
 function closeModal(after?: () => void) {
+  neteasePanel.cancel();
   if (!modalType && !modalClosing) { after?.(); return; }
   modalClosing = true; modalTransition.hide(prefs().reduced, () => {
     modalType = null; modalClosing = false; $('#stage').inert = false; $('#player-bar').inert = false;
@@ -290,16 +307,17 @@ function renderSearchResults() {
 }
 function playlistsModal() {
   const lists = library.snapshot.playlists;
-  openModal('playlists', '歌单管理', `<form id="create-playlist" class="playlist-form"><input name="name" placeholder="新歌单名称" maxlength="80" aria-label="新歌单名称" required><button class="primary-action" type="submit">＋ 新建歌单</button></form><div class="music-results">${lists.length ? lists.map((list, index) => `<button class="playlist-card" data-action="edit-playlist" data-id="${esc(list.id)}"><span>${String(index + 1).padStart(2, '0')}</span><strong>${esc(list.name)}</strong><small>${list.trackIds.length} TRACKS</small><b>↗</b></button>`).join('') : '<div class="panel-empty">创建一个歌单，成为阵列中的新一列。</div>'}</div>`);
+  openModal('playlists', '歌单管理', `<div class="playlist-toolbar"><span>本地歌单与同步的网易云歌单</span><button data-action="cloud-playlists">读取网易云歌单 ↓</button></div><form id="create-playlist" class="playlist-form"><input name="name" placeholder="新歌单名称" maxlength="80" aria-label="新歌单名称" required><button class="primary-action" type="submit">＋ 新建歌单</button></form><div class="music-results">${lists.length ? lists.map((list, index) => `<button class="playlist-card" data-action="edit-playlist" data-id="${esc(list.id)}"><span>${String(index + 1).padStart(2, '0')}</span><strong>${esc(list.name)}</strong><small>${list.readOnly ? '网易云 · ' : ''}${list.trackIds.length} TRACKS</small><b>↗</b></button>`).join('') : '<div class="panel-empty">创建一个歌单，成为阵列中的新一列。</div>'}</div>`);
 }
 function playlistModal(id: string) {
   const list = library.snapshot.playlists.find(list => list.id === id); if (!list) { playlistsModal(); return; }
   modalPlaylist = id;
+  if (list.readOnly) { openModal('playlist', list.name, `<p class="help-note">网易云歌单 · 本地只读索引${list.accountId !== String(library.netease.account?.uid) ? ' · 请连接原账号后同步' : ''}</p><div class="playlist-toolbar"><button data-action="sync-cloud-playlist" ${list.accountId !== String(library.netease.account?.uid) ? 'disabled' : ''}>重新同步 ↻</button><button data-action="copy-cloud-playlist">复制为本地歌单</button><button data-action="browse-playlist">在阵列中浏览 ↗</button><button data-action="playlist-play">播放全部 ▷</button><button data-action="delete-playlist">移除本地索引</button></div><div class="music-results">${list.trackIds.map((trackId, index) => { const track = library.track(trackId); return track ? trackRow(track, 'cloud', index) : ''; }).join('') || '<p class="panel-empty">这个歌单没有可读取的歌曲。</p>'}</div>`); return; }
   openModal('playlist', list.name, `<form id="rename-playlist" class="playlist-form"><input name="name" value="${esc(list.name)}" maxlength="80" aria-label="歌单名称" required><button type="submit">保存名称</button><button type="button" data-action="delete-playlist">删除歌单</button></form><div class="playlist-toolbar"><button data-action="playlist-add-songs">＋ 添加歌曲</button><button data-action="browse-playlist">在阵列中浏览 ↗</button><button data-action="playlist-play">播放全部 ▷</button></div><div class="music-results">${list.trackIds.length ? list.trackIds.map((trackId, index) => trackRow(library.track(trackId)!, 'playlist', index)).join('') : '<div class="panel-empty">这个歌单还没有歌曲。点击添加歌曲开始归档。</div>'}</div>`);
 }
 function addPlaylistModal(trackId: string) {
   modalTrackId = trackId;
-  openModal('add-playlist', '加入歌单', `<form id="create-and-add" class="playlist-form"><input name="name" placeholder="新歌单名称" maxlength="80" aria-label="新歌单名称" required><button type="submit">新建并加入</button></form><div class="music-results">${library.snapshot.playlists.map(list => `<button class="playlist-card" data-action="add-to-list" data-id="${esc(list.id)}"><strong>${esc(list.name)}</strong><small>${list.trackIds.length} TRACKS</small><b>＋</b></button>`).join('') || '<div class="panel-empty">先创建一个歌单。</div>'}</div>`);
+  openModal('add-playlist', '加入歌单', `<form id="create-and-add" class="playlist-form"><input name="name" placeholder="新歌单名称" maxlength="80" aria-label="新歌单名称" required><button type="submit">新建并加入</button></form><div class="music-results">${library.snapshot.playlists.filter(list => !list.readOnly).map(list => `<button class="playlist-card" data-action="add-to-list" data-id="${esc(list.id)}"><strong>${esc(list.name)}</strong><small>${list.trackIds.length} TRACKS</small><b>＋</b></button>`).join('') || '<div class="panel-empty">先创建一个歌单。</div>'}</div>`);
 }
 function queueModal() {
   openModal('queue', '播放队列', `<div class="playlist-toolbar"><span>${player.state.queue.length} TRACKS</span><button data-action="clear-queue">清空队列</button></div><div class="music-results">${player.state.queue.length ? player.state.queue.map((entry, index) => { const track = library.track(entry.trackId); return track ? trackRow(track, 'queue', index, entry.id) : ''; }).join('') : '<div class="panel-empty">选择一首歌曲播放，或将歌曲加入队列。</div>'}</div>`);
@@ -313,6 +331,7 @@ function updatePlayer() {
   if (!player) return;
   configureAudio();
   const track = player.currentTrack;
+  if (miniTrackId !== track?.id) { playbackAssetsAbort?.abort(); playbackAssetsAbort = new AbortController(); if (track) loadTrackAssets(track, playbackAssetsAbort.signal); }
   $('#mini-title').textContent = track?.title || '尚未播放'; $('#mini-artist').textContent = track?.artist || 'RHINE LAB / LOCAL MUSIC';
   if (miniTrackId !== track?.id || miniCoverBlob !== track?.cover) {
     miniTrackId = track?.id; miniCoverBlob = track?.cover; if (miniCoverUrl) URL.revokeObjectURL(miniCoverUrl);
@@ -339,6 +358,12 @@ async function runAction(button: HTMLElement) {
   if (!ready && !['skip', 'close-modal'].includes(action || '')) return;
   if (action === 'skip') { if (ready) setMode('archive'); return; }
   if (action === 'close-modal') { closeModal(); return; }
+  if (action === 'netease') { neteasePanel.open(); return; }
+  if (action === 'cloud-list-play' && id && modalPlaylist) { const list = library.snapshot.playlists.find(list => list.id === modalPlaylist); if (list) await player.playQueue(list.trackIds, id); return; }
+  if (action?.startsWith('cloud-')) { await neteasePanel.action(action, id); return; }
+  if (action === 'sync-cloud-playlist' && modalPlaylist) { const list = library.snapshot.playlists.find(list => list.id === modalPlaylist); if (list?.sourceId) await neteasePanel.importPlaylist(list.sourceId); return; }
+  if (action === 'copy-cloud-playlist' && modalPlaylist) { const source = library.snapshot.playlists.find(list => list.id === modalPlaylist); if (source) { const copy = library.createPlaylist(`${source.name}（本地副本）`); library.addToPlaylist(copy.id, source.trackIds); playlistModal(copy.id); tell('已复制为可编辑的本地歌单'); } return; }
+  if (action === 'retry-cloud-lyrics') { const track = selectedTrack(); if (track && detailAssetsAbort) { await library.ensureLyrics(track, detailAssetsAbort.signal); renderTab(); } return; }
   if (action === 'import') { importModal(); return; }
   if (action === 'search') { searchModal(); return; }
   if (action === 'settings') { settingsModal(); return; }
@@ -411,6 +436,7 @@ document.addEventListener('click', event => {
   if (target === $('#music-modal')) closeModal();
 }, eventOptions);
 document.addEventListener('submit', event => {
+  if ((event.target as HTMLFormElement).id === 'cloud-search-form') { event.preventDefault(); const query = String(new FormData(event.target as HTMLFormElement).get('query') || ''); void neteasePanel.search(query).catch(error => tell(error.message)); return; }
   const form = event.target as HTMLFormElement; if (!['create-playlist', 'rename-playlist', 'create-and-add', 'add-songs'].includes(form.id)) return;
   event.preventDefault(); const data = new FormData(form), name = String(data.get('name') || '').trim();
   if (form.id === 'create-playlist') { if (name) playlistModal(library.createPlaylist(name).id); }
@@ -491,6 +517,16 @@ document.addEventListener('drop', event => {
 }, eventOptions);
 library.addEventListener('change', () => { if (!ready) return; syncCatalog(); if (modalType === 'search') renderSearchResults(); });
 library.addEventListener('error', event => tell((event as CustomEvent<string>).detail));
+library.netease.addEventListener('auth', () => { const button = document.querySelector('[data-action="netease"]'); if (button) { button.setAttribute('aria-label', library.netease.account ? `网易云音乐，已登录 ${library.netease.account.nickname}` : '网易云音乐，扫码登录'); button.classList.toggle('cloud-connected', !!library.netease.account); } }, eventOptions);
+library.addEventListener('asset', event => {
+  const asset = (event as CustomEvent<{ id: string; kind: string }>).detail;
+  if (!ready) return;
+  if (asset.kind === 'cover') {
+    scene?.refreshMusicAssets(); player?.refreshMediaMetadata(asset.id); updatePlayer();
+    if (mode === 'detail' && selectedTrack()?.id === asset.id) { const track = selectedTrack()!; if (detailCoverUrl) URL.revokeObjectURL(detailCoverUrl); detailCoverUrl = URL.createObjectURL(track.cover!); const art = document.querySelector('.song-art'); if (art) art.innerHTML = `<img src="${detailCoverUrl}" alt="${esc(track.title)} 的封面">`; }
+  }
+  if (asset.kind === 'lyrics' && mode === 'detail' && activeTab === 'lyrics' && selectedTrack()?.id === asset.id) renderTab();
+}, eventOptions);
 library.addEventListener('progress', event => {
   const progress = (event as CustomEvent<ImportProgress>).detail; $('#import-progress').hidden = false;
   $('#import-label').textContent = `${progress.name} · ${progress.completed}/${progress.total}${progress.failed ? ` · ${progress.failed} 个标签未读取` : ''}`;
@@ -550,6 +586,7 @@ async function initialize() {
   await Promise.allSettled([loadBootWebfonts(), document.fonts.load('400 20px MiSans', '音乐播放器导入专辑歌单歌词0123456789'), document.fonts.load('700 20px MiSans', 'RHINE LAB')]);
   if (lifecycle.closed) return;
   applyPreferences(true); updateSelection(); updatePlayer(); ready = true;
+  void library.netease.restoreSession().catch(error => { if (!lifecycle.closed) tell(error.message); });
   const complete = (silent = false) => {
     if (started || lifecycle.closed) return; started = true; if (silent) { prefs().sound = false; applyPreferences(); }
     const full = !prefs().reduced && (prefs().intro === 'always' || prefs().intro === 'first' && !prefs().seenIntro);
