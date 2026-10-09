@@ -35,17 +35,20 @@ export class MusicCoverLayer {
     const geometry = new THREE.PlaneGeometry(coverFrame.width, coverFrame.height); geometry.setAttribute('musicSlot', this.uvSlots);
     const material = new THREE.MeshBasicMaterial({ map: this.texture, side: THREE.DoubleSide, toneMapped: false });
     material.onBeforeCompile = shader => {
-      shader.vertexShader = 'attribute float musicSlot;\nvarying float vMusicSlot;\n' + shader.vertexShader;
+      // Slot IDs are discrete per instance. Perspective interpolation can put
+      // 8 just below 8, making mod/floor sample the previous atlas row/column.
+      shader.vertexShader = 'attribute float musicSlot;\nflat varying float vMusicSlot;\n' + shader.vertexShader;
       shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\nvMusicSlot = musicSlot;');
-      shader.fragmentShader = 'varying float vMusicSlot;\n' + shader.fragmentShader;
+      shader.fragmentShader = 'flat varying float vMusicSlot;\n' + shader.fragmentShader;
       shader.fragmentShader = shader.fragmentShader.replace('#include <map_fragment>', `
         #ifdef USE_MAP
-          vec2 tile = vec2(mod(vMusicSlot, 8.0), 7.0 - floor(vMusicSlot / 8.0));
+          float slot = floor(vMusicSlot + 0.5);
+          vec2 tile = vec2(mod(slot, 8.0), 7.0 - floor(slot / 8.0));
           vec2 atlasUV = (tile + vec2(0.008) + vMapUv * 0.984) / 8.0;
           diffuseColor *= texture2D(map, atlasUV);
         #endif`);
     };
-    material.customProgramCacheKey = () => 'rhine-music-cover-atlas-v1';
+    material.customProgramCacheKey = () => 'rhine-music-cover-atlas-v2';
     this.mesh = new THREE.InstancedMesh(geometry, material, this.capacity); this.mesh.frustumCulled = false;
     this.mesh.count = 0; this.mesh.visible = false; this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   }

@@ -1,6 +1,6 @@
 <!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>封面卡片材质检查</title></head><body>
 <div id="viewport"><main id="stage" data-layout="desktop" data-mode="detail" data-boot="done"></main></div>
-<nav id="review-controls" aria-label="封面回归检查"><button id="blue">蓝色封面</button><button id="warm">暖色封面</button><button id="original">原双环内构</button><button id="cover">封面卡片</button><button id="theme">切换亮暗</button><button id="viewer">360° 查看</button></nav>
+<nav id="review-controls" aria-label="封面回归检查"><button id="blue">蓝色封面</button><button id="warm">暖色封面</button><button id="original">原双环内构</button><button id="cover">封面卡片</button><button id="theme">切换亮暗</button><button id="viewer">360° 查看</button><label>图集位置 <select id="atlas-slot"><option>1</option><option>7</option><option>8</option><option>15</option><option>16</option><option>31</option><option>32</option><option>55</option><option>56</option><option>63</option></select></label><label>封面样本 <input id="cover-file" type="file" accept="image/*"></label></nav>
 <output id="review-status">载入真实场景…</output>
 <script type="module">
 import '../src/style.css'; import '../src/responsive.css'; import '../src/music.css';
@@ -16,10 +16,25 @@ setMusicCatalog(tracks,[{id:'review',kind:'album',name:'材质回归样本',trac
 const stage=document.querySelector('#stage'); stage.innerHTML=musicShell;
 document.querySelector('#loading').remove(); document.querySelector('#boot').hidden=true;
 document.querySelector('#skip').hidden=true; document.querySelector('#detail-ui').hidden=false;
-const scene=new ArchiveScene(document.querySelector('#three-scene')); let viewer, selected=0, dark=false;
+const scene=new ArchiveScene(document.querySelector('#three-scene')); let viewer, selected=0, dark=new URLSearchParams(location.search).get('theme')==='dark';
 const fit=()=>{const scale=Math.min(innerWidth/1920,innerHeight/1080);stage.style.width='1920px';stage.style.height='1080px';stage.style.transform=`translate(-50%,-50%) scale(${scale})`;scene.resize();viewer?.resize();};
 const describe=()=>{document.querySelector('#detail-content').innerHTML=`<span class="detail-eyebrow">COVER / MATERIAL REVIEW</span><h2>${tracks[selected].title}</h2><p>合成封面 · 四边窄留白 · 主色调玻璃</p>`;document.querySelector('#review-status').textContent=tracks[selected].title+' · 场景已就绪';};
 await scene.load();scene.setMotion(reducedMotion());scene.refreshCatalog(0);scene.setCardStyle(true);scene.setMode('detail');scene.revealImmediately();describe();fit();
+// Dev-only: pin a slot to reproduce the actual production shader at row boundaries.
+// This standalone scene never opens the user's music database or API session.
+const slotControl=document.querySelector('#atlas-slot');
+const requestedSlot=Number(new URLSearchParams(location.search).get('slot')||1);
+if([...slotControl.options].some(option=>Number(option.value)===requestedSlot)) slotControl.value=String(requestedSlot);
+scene.covers.slots.set(tracks[0].id,Number(slotControl.value));scene.setTheme(dark,true);
+slotControl.onchange=()=>{
+  scene.covers.slots.set(tracks[0].id,Number(slotControl.value));scene.covers.sources.delete(tracks[0].id);scene.refreshMusicAssets();
+};
+document.querySelector('#cover-file').onchange=event=>{
+  const file=event.target.files?.[0];if(!file)return;
+  tracks[0].cover=file;tracks[0].title=file.name;selected=0;
+  setMusicCatalog(tracks,[{id:'review',kind:'album',name:'材质回归样本',trackIds:tracks.map(track=>track.id)}]);
+  scene.refreshCatalog(0);scene.refreshMusicAssets();describe();
+};
 document.querySelector('#blue').onclick=()=>{selected=0;scene.select(0);describe();};
 document.querySelector('#warm').onclick=()=>{selected=1;scene.select(1);describe();};
 document.querySelector('#original').onclick=()=>scene.setCardStyle(false);
@@ -31,4 +46,5 @@ const lifecycle=new PageLifecycle(ms=>{if(!viewer?.isOpen)scene.update(ms/1000);
 document.addEventListener('visibilitychange',()=>lifecycle.setHidden(document.hidden));window.addEventListener('pagehide',event=>lifecycle.pageHide(event.persisted));window.addEventListener('pageshow',()=>lifecycle.setHidden(document.hidden));lifecycle.start();
 </script>
 <style>#review-controls{position:fixed;top:16px;left:50%;transform:translateX(-50%);display:flex;gap:8px;z-index:99}#review-controls button{background:#eee9e1;padding:10px 14px;border:1px solid #afa08a;color:#272724;font-size:12px}#review-status{position:fixed;bottom:14px;left:20px;font:12px sans-serif;color:#686259}.system-nav,.back-button,.viewer-open,.archive-counter,.system-footer,.column-navigation,.archive-hint,.powered{display:none!important}#detail-content{padding:45px 40px;top:35%;opacity:1!important}#detail-content h2{font-size:42px;margin:24px 0}#detail-content p{font-size:17px}</style>
+<style>#review-controls{width:max-content;max-width:calc(100vw - 32px);flex-wrap:wrap;justify-content:center}#review-controls button{white-space:nowrap;flex-shrink:0}#review-controls label{font:12px sans-serif;color:#272724;padding:6px;display:flex;align-items:center;gap:6px;background:#eee9e1}#cover-file{width:230px}#atlas-slot{padding:4px}</style>
 </body></html>
