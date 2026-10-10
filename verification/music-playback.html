@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<title>音乐播放错误回归</title>
+<style>body{font:16px system-ui;background:#122025;color:#eee;padding:32px}button{padding:12px;margin:8px}pre{white-space:pre-wrap}</style>
+<h1>音乐播放错误回归</h1>
+<p>独立验证页，不读写账号、音乐库或播放偏好。前两项使用程序生成的安静 WAV；第三项只请求公开接口，不携带登录凭据。</p>
+<button id="renew">验证失效地址重新获取</button>
+<button id="broken">验证持续失败停止</button>
+<button id="online">验证公开网易云样本</button>
+<button id="stop">停止并释放</button>
+<pre id="result">尚未运行</pre>
+<script type="module">
+import { MusicPlayer } from '/src/music/player.ts';
+import { secureMediaUrl, NETEASE_API } from '/src/music/netease.ts';
+const result = document.querySelector('#result');
+let player, release;
+function cleanup() { player?.dispose(); release?.(); player = release = undefined; }
+function wav() {
+ const rate = 8000, samples = rate * 5, bytes = new ArrayBuffer(44 + samples * 2), view = new DataView(bytes);
+ const text = (offset, value) => [...value].forEach((char, i) => view.setUint8(offset + i, char.charCodeAt(0)));
+ text(0, 'RIFF'); view.setUint32(4, bytes.byteLength - 8, true); text(8, 'WAVE'); text(12, 'fmt ');
+ view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true); view.setUint32(24, rate, true);
+ view.setUint32(28, rate * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true); text(36, 'data'); view.setUint32(40, samples * 2, true);
+ for (let i = 0; i < samples; i++) view.setInt16(44 + i * 2, Math.sin(i * 2 * Math.PI * 220 / rate) * 400, true);
+ const url = URL.createObjectURL(new Blob([bytes], { type: 'audio/wav' })); release = () => URL.revokeObjectURL(url); return url;
+}
+async function run(mode) {
+ cleanup(); result.textContent = '运行中…';
+ const lines = [], song = { id: 'test', title: '验证样本', artist: 'Rhine Test', providerId: 'netease', duration: 5 }, audio = new Audio();
+ let attempts = 0, released = 0;
+ const good = mode === 'online' ? undefined : wav();
+ const provider = { async resolveMedia(track, signal) {
+  attempts++;
+  if (mode === 'online') {
+   const response = await fetch(NETEASE_API + '/song/url/v1?timestamp=' + Date.now(), { method:'POST', mode:'cors', credentials:'omit', cache:'no-store', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:new URLSearchParams({id:'27591651',level:'standard',noCookie:'true'}), signal });
+   const body = await response.json(), item = body.data?.[0], url = secureMediaUrl(item?.url);
+   if (!url || item.code !== 200) throw new Error('公开接口无可播放地址：' + (item?.code ?? response.status));
+   lines.push('公开样本：' + item.type + ' · ' + new URL(url).hostname);
+   return { url, crossOrigin:'anonymous', release(){ released++; } };
+  }
+  return { url: mode === 'renew' && attempts > 1 ? good : location.origin + '/verification/missing-test-audio.wav', crossOrigin:'anonymous', release(){ released++; } };
+ } };
+ player = new MusicPlayer({queue:[],currentEntryId:null,position:0,volume:.15,mode:'sequence'}, provider, () => song, audio);
+ player.addEventListener('error', event => { lines.push(event.detail); result.textContent = lines.join('\n'); });
+ await player.playQueue([song.id], song.id);
+ lines.push('资源解析次数：' + attempts, '已释放资源：' + released, '播放状态：' + (player.playing ? '播放' : '暂停'));
+ if (mode === 'broken') lines.push(attempts === 2 && !player.playing && !audio.src && !player.wantsPlayback ? 'PASS：持续失败停止，最多重试一次' : 'FAIL');
+ else if (player.playing) {
+  await new Promise(resolve => setTimeout(resolve, 1200));
+  lines.push('音频进度：' + audio.currentTime.toFixed(2), audio.currentTime > .5 && (mode === 'online' || attempts === 2) ? 'PASS：真实 HTMLAudioElement 进度推进' : 'FAIL');
+ }
+ result.textContent = lines.join('\n');
+}
+for (const mode of ['renew','broken','online']) document.querySelector('#' + mode).onclick = () => { for (const button of document.querySelectorAll('button')) button.disabled = true; run(mode).catch(error => { result.textContent += '\n' + error.name + ': ' + error.message; }).finally(() => { for (const button of document.querySelectorAll('button')) button.disabled = false; }); };
+document.querySelector('#stop').onclick = () => { cleanup(); result.textContent += '\n已停止并释放'; };
+window.addEventListener('pagehide', cleanup, {once:true});
+</script>
+</html>

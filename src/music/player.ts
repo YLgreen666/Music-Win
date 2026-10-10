@@ -1,6 +1,11 @@
 import { nextQueueIndex, reconcilePlayback } from './domain.ts';
 import type { MediaResource, MusicProvider, PlaybackMode, PlaybackState, QueueEntry, Track } from './types.ts';
 
+class MediaLoadError extends Error {
+  readonly retryable: boolean;
+  constructor(message: string, retryable: boolean) { super(message); this.retryable = retryable; }
+}
+
 export class MusicPlayer extends EventTarget {
   readonly audio: HTMLAudioElement;
   readonly state: PlaybackState;
@@ -21,6 +26,9 @@ export class MusicPlayer extends EventTarget {
   private frequency?: Uint8Array<ArrayBuffer>;
   private mediaCover?: string;
   private persistedAt = 0;
+  // Keep failures across metadata-successful loads: a stream can fail later.
+  private failedEntries = new Set<string>();
+  private loadedPosition = 0;
   private bandValues = { low: 0, mid: 0, high: 0, activity: 0 };
   constructor(state: PlaybackState, provider: MusicProvider, findTrack: (id: string) => Track | undefined, audio = new Audio()) {
     super(); this.state = state; this.provider = provider; this.findTrack = findTrack; this.audio = audio;
@@ -28,13 +36,23 @@ export class MusicPlayer extends EventTarget {
     audio.addEventListener('timeupdate', () => {
       if (this.loading || this.disposed) return;
       this.state.position = audio.currentTime || 0;
+      if (this.playing && audio.currentTime > this.loadedPosition + 1) this.failedEntries.clear();
       this.dispatchEvent(new Event('time'));
       if (Date.now() - this.persistedAt > 5000) { this.persistedAt = Date.now(); this.dispatchEvent(new Event('persist')); }
       this.syncMediaPosition();
     }, { signal: this.events.signal });
     for (const event of ['play', 'pause', 'durationchange', 'waiting', 'playing']) audio.addEventListener(event, () => { this.notify(); }, { signal: this.events.signal });
     audio.addEventListener('ended', () => { if (!this.loading) void this.advance(1, true); }, { signal: this.events.signal });
-    audio.addEventListener('error', () => { if (!this.loading && this.resource) { this.report('当前音频无法解码，正在尝试下一首'); void this.advance(1, true); } }, { signal: this.events.signal });
+    audio.addEventListener('error', () => {
+      if (this.loading || this.disposed || !this.resource) return;
+      const track = this.currentTrack;
+      if (track) this.report(this.mediaFailure(track).message);
+      if (this.state.currentEntryId) this.failedEntries.add(this.state.currentEntryId);
+      const shouldContinue = this.playIntent;
+      this.capturePosition(); this.releaseMedia();
+      if (shouldContinue) void this.advanceQueue(1, true, true);
+      else this.notify(true);
+    }, { signal: this.events.signal });
     if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
       const actions: Partial<Record<MediaSessionAction, MediaSessionActionHandler>> = {
         play: () => { void this.resume(); }, pause: () => this.pause(),
@@ -59,6 +77,25 @@ export class MusicPlayer extends EventTarget {
     return changed;
   }
   private report(message: string) { this.dispatchEvent(new CustomEvent('error', { detail: message })); }
+  private mediaFailure(track: Track) {
+    const online = track.providerId === 'netease', code = this.audio.error?.code;
+    const reasons: Record<number, string> = {
+      1: '音频加载被中止，请重新播放',
+      2: online ? '音频下载失败，可能是网络中断或播放地址失效' : '文件读取中断，请检查文件访问',
+      3: '音频解码失败，文件可能损坏或浏览器不支持此编码',
+      4: online ? '音频地址不可用，可能是服务器拒绝访问、跨域限制或格式不支持' : '音频格式不受当前浏览器支持',
+    };
+    let host = '';
+    if (online && this.resource) try { host = ` · ${new URL(this.resource.url).hostname}`; } catch { /* No full signed URL in diagnostics. */ }
+    const detail = `${reasons[code || 0] || (online ? '在线音频加载失败，请检查网络和音频服务器响应' : '音频无法解码，当前浏览器可能不支持这个格式')}（${code ? `MEDIA_ERR_${code}` : '无浏览器错误码'}${host}）`;
+    if (online) track.playbackNotice = detail;
+    return new MediaLoadError(`${track.title}：${detail}`, online && (code === 2 || code === 4));
+  }
+  private releaseMedia() {
+    const resource = this.resource; this.resource = undefined;
+    this.audio.pause(); this.audio.removeAttribute('src'); this.audio.load();
+    resource?.release();
+  }
   private notify(persist = false) {
     if (this.disposed) return;
     this.dispatchEvent(new Event('change'));
@@ -79,6 +116,7 @@ export class MusicPlayer extends EventTarget {
     } catch { /* Playback remains available when Web Audio is unavailable. */ }
   }
   async playQueue(trackIds: string[], selectedId: string) {
+    this.failedEntries.clear();
     this.unlockAudio();
     this.state.queue = trackIds.filter(id => !!this.findTrack(id)).map(trackId => ({ id: crypto.randomUUID(), trackId }));
     const entry = this.state.queue.find(entry => entry.trackId === selectedId);
@@ -93,6 +131,7 @@ export class MusicPlayer extends EventTarget {
     this.notify(true);
   }
   async playEntry(id: string) {
+    this.failedEntries.clear();
     this.unlockAudio(); const entry = this.state.queue.find(entry => entry.id === id);
     if (entry) { this.state.position = 0; await this.loadEntry(entry, true); }
   }
@@ -104,9 +143,22 @@ export class MusicPlayer extends EventTarget {
     if (this.currentIndex < 0 && this.state.queue.length) this.state.currentEntryId = this.state.queue[0].id;
     const entry = this.state.queue[this.currentIndex];
     if (!entry) return;
+    this.failedEntries.clear();
     if (!this.resource) { await this.loadEntry(entry, true, this.state.position); return; }
-    try { await this.audio.play(); this.notify(true); }
-    catch (error) { this.report(error instanceof Error && error.name === 'NotAllowedError' ? '请点击播放按钮，允许浏览器播放音乐。' : '无法播放当前歌曲，请重新关联文件。'); }
+    const generation = this.generation;
+    try {
+      await this.audio.play();
+      if (generation !== this.generation || this.disposed) return;
+      if (!this.playIntent) this.audio.pause();
+      this.notify(true);
+    } catch (error) {
+      if (generation !== this.generation || this.disposed || !this.playIntent) return;
+      if (error instanceof Error && error.name === 'NotAllowedError') { this.playIntent = false; this.report('请点击播放按钮，允许浏览器播放音乐。'); this.notify(); }
+      else if (this.currentTrack?.providerId === 'netease') {
+        // A paused CDN URL can expire. Resolve again instead of asking to relink a local file.
+        this.capturePosition(); await this.loadEntry(entry, true, this.state.position, false);
+      } else { this.playIntent = false; this.report('无法播放当前歌曲，请检查文件访问或重新关联文件。'); this.notify(); }
+    }
   }
   pause() { this.playIntent = false; this.audio.pause(); this.notify(true); }
   async toggle() { if (this.playing || this.loading && this.playIntent) this.pause(); else await this.resume(); }
@@ -134,6 +186,7 @@ export class MusicPlayer extends EventTarget {
   }
   stop() {
     this.playIntent = false;
+    this.failedEntries.clear();
     ++this.generation; this.resolveAbort?.abort(); this.cancelLoad?.(); this.cancelLoad = undefined; this.loading = false;
     this.audio.pause(); this.audio.removeAttribute('src'); this.audio.load();
     this.resource?.release(); this.resource = undefined;
@@ -145,24 +198,32 @@ export class MusicPlayer extends EventTarget {
     else this.notify();
   }
   async advance(direction = 1, ended = false) {
+    this.failedEntries.clear();
+    await this.advanceQueue(direction, ended, false);
+  }
+  private async advanceQueue(direction: number, ended: boolean, afterFailure: boolean) {
     if (this.disposed) return;
     this.unlockAudio();
-    const index = nextQueueIndex(this.state.queue, this.currentIndex, this.state.mode, direction, ended);
-    if (index < 0) { this.audio.pause(); this.seek(0); this.notify(true); return; }
-    const visited = new Set<string>();
-    let candidate = index;
-    while (visited.size < this.state.queue.length) {
-      const entry = this.state.queue[candidate]; if (!entry || visited.has(entry.id)) break;
-      visited.add(entry.id);
-      const success = await this.loadEntry(entry, true);
-      if (success === 'superseded' || success === 'blocked') return;
-      if (success === 'ready') return;
+    // A broken single-repeat song must move on; successful endings still repeat it.
+    const mode = afterFailure && this.state.mode === 'repeat-one' ? 'repeat-all' : this.state.mode;
+    const index = nextQueueIndex(this.state.queue, this.currentIndex, mode, direction, ended);
+    if (index < 0) { this.playIntent = false; this.audio.pause(); this.seek(0); this.notify(true); return; }
+    const visited = this.failedEntries;
+    let candidate = index, inspected = 0;
+    while (inspected++ < this.state.queue.length) {
+      const entry = this.state.queue[candidate]; if (!entry) break;
+      if (!visited.has(entry.id)) {
+        const success = await this.loadEntry(entry, true);
+        if (success === 'superseded' || success === 'blocked') return;
+        if (success === 'ready') return;
+        visited.add(entry.id);
+      }
       if (ended && this.state.mode === 'sequence' && candidate + direction >= this.state.queue.length) break;
       candidate = (candidate + (direction < 0 ? -1 : 1) + this.state.queue.length) % this.state.queue.length;
     }
-    this.audio.pause(); this.playIntent = false; this.report('本轮队列没有可播放的歌曲，请检查文件访问、网易云登录或歌曲权限。'); this.notify(true);
+    this.releaseMedia(); this.playIntent = false; this.report('本轮队列没有可播放的歌曲，请检查文件访问、网易云登录或歌曲权限。'); this.notify(true);
   }
-  private async loadEntry(entry: QueueEntry, play: boolean, position = 0): Promise<'ready' | 'failed' | 'superseded' | 'blocked'> {
+  private async loadEntry(entry: QueueEntry, play: boolean, position = 0, renewOnline = true): Promise<'ready' | 'failed' | 'superseded' | 'blocked'> {
     if (this.disposed) return 'superseded';
     const generation = ++this.generation;
     this.resolveAbort?.abort(); this.resolveAbort = new AbortController();
@@ -171,6 +232,7 @@ export class MusicPlayer extends EventTarget {
     this.resource?.release(); this.resource = undefined;
     this.audio.removeAttribute('src'); this.audio.load();
     this.state.currentEntryId = entry.id; this.state.position = position; this.notify(true);
+    this.loadedPosition = position;
     let resource: MediaResource | undefined;
     try {
       const track = this.findTrack(entry.trackId); if (!track) throw new Error('歌曲已从音乐库移除');
@@ -182,7 +244,7 @@ export class MusicPlayer extends EventTarget {
         let timer: ReturnType<typeof setTimeout>;
         const cleanup = () => { clearTimeout(timer); this.audio.removeEventListener('loadedmetadata', loaded); this.audio.removeEventListener('error', failed); if (generation === this.generation) this.cancelLoad = undefined; };
         const loaded = () => { cleanup(); resolve(); };
-        const failed = () => { cleanup(); reject(new Error(track.providerId === 'netease' ? '在线音频加载失败，请检查网络、播放权限或音频跨域访问' : '音频无法解码，当前浏览器可能不支持这个格式')); };
+        const failed = () => { const error = this.mediaFailure(track); cleanup(); reject(error); };
         this.cancelLoad = () => { cleanup(); reject(new Error('播放请求已替换')); };
         this.audio.addEventListener('loadedmetadata', loaded); this.audio.addEventListener('error', failed);
         timer = setTimeout(() => { cleanup(); reject(new Error('音频加载超时')); }, 20000);
@@ -201,10 +263,17 @@ export class MusicPlayer extends EventTarget {
     } catch (error) {
       if (generation !== this.generation) return 'superseded';
       this.loading = false;
-      const message = error instanceof Error ? error.message : '歌曲播放失败';
-      this.report(message); this.notify(true);
-      if (error instanceof Error && error.name === 'NotAllowedError') return 'blocked';
-      this.resource?.release(); this.resource = undefined;
+      if (error instanceof Error && error.name === 'NotAllowedError') {
+        this.playIntent = false; this.report('请点击播放按钮，允许浏览器播放音乐。'); this.notify(true); return 'blocked';
+      }
+      const track = this.findTrack(entry.trackId);
+      const failure = this.audio.error && track ? this.mediaFailure(track) : error;
+      const retry = renewOnline && failure instanceof MediaLoadError && failure.retryable;
+      const intent = this.playIntent;
+      this.releaseMedia();
+      if (retry) { this.report(`${track!.title}：音频地址加载失败，正在重新获取播放地址…`); return this.loadEntry(entry, intent, position, false); }
+      this.playIntent = false;
+      this.report(failure instanceof Error ? failure.message : '歌曲播放失败'); this.notify(true);
       return 'failed';
     }
   }

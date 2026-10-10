@@ -465,3 +465,88 @@ test('pausing a pending load prevents late autoplay and a later resume plays the
   audio.dispatchEvent(new Event('loadedmetadata')); await pending; assert.equal(player.playing, false);
   await player.resume(); assert.equal(player.playing, true); assert.equal(player.currentTrack.id, 'a'); player.stop();
 });
+
+test('online media network failure refreshes the URL once and keeps signed paths out of errors', async () => {
+  class NetworkAudio extends FakeAudio {
+    load() {
+      this.error = this.src.includes('expired') ? { code: 2 } : null;
+      const src = this.src, revision = ++this.loadRevision;
+      if (src) queueMicrotask(() => { if (revision === this.loadRevision) this.dispatchEvent(new Event(this.error ? 'error' : 'loadedmetadata')); });
+    }
+  }
+  const song = neteaseTrack(cloudSong(42)), audio = new NetworkAudio(), messages = [];
+  let attempts = 0, released = 0;
+  const player = new MusicPlayer(state(), { resolveMedia: async () => ({ url: `https://audio.test/${++attempts === 1 ? 'expired' : 'fresh'}?secret=token`, release() { released++; } }) }, () => song, audio);
+  player.addEventListener('error', event => messages.push(event.detail));
+  await player.playQueue([song.id], song.id);
+  assert.equal(attempts, 2); assert.equal(released, 1); assert.equal(player.playing, true);
+  assert.ok(messages.every(message => !message.includes('secret') && !message.includes('token')));
+  player.dispose(); assert.equal(released, 2);
+});
+
+test('persistent online CORS/resource errors retry once; decoder errors do not retry', async () => {
+  for (const code of [2, 3, 4]) {
+    class BrokenAudio extends FakeAudio {
+      load() {
+        const src = this.src, revision = ++this.loadRevision; this.error = src ? { code } : null;
+        if (src) queueMicrotask(() => { if (revision === this.loadRevision) this.dispatchEvent(new Event('error')); });
+      }
+    }
+    const song = neteaseTrack(cloudSong(42)), messages = []; let attempts = 0, released = 0;
+    const player = new MusicPlayer(state(), { resolveMedia: async () => { attempts++; return { url: 'https://audio.test/song?secret=token', release() { released++; } }; } }, () => song, new BrokenAudio());
+    player.addEventListener('error', event => messages.push(event.detail));
+    await player.playQueue([song.id], song.id);
+    assert.equal(attempts, code === 3 ? 1 : 2); assert.equal(released, attempts);
+    assert.equal(player.audio.src, ''); assert.equal(player.wantsPlayback, false);
+    assert.match(messages.at(-1), new RegExp(`MEDIA_ERR_${code}.*audio.test`));
+    assert.match(song.playbackNotice, new RegExp(`MEDIA_ERR_${code}`));
+    assert.ok(messages.every(message => !message.includes('secret') && !message.includes('token'))); player.dispose();
+  }
+});
+
+test('streams failing after metadata stop after one pass even in single-repeat mode', async () => {
+  for (const mode of ['repeat-one', 'repeat-all', 'shuffle']) {
+    const songs = [neteaseTrack(cloudSong(42)), neteaseTrack(cloudSong(43))], attempts = [];
+    const audio = new FakeAudio(), playback = state(); playback.mode = mode;
+    const player = new MusicPlayer(playback, { resolveMedia: async song => { attempts.push(song.id); return { url: song.id, release() {} }; } }, id => songs.find(song => song.id === id), audio);
+    await player.playQueue(songs.map(song => song.id), songs[0].id);
+    audio.error = { code: 2 }; audio.dispatchEvent(new Event('error')); await tick();
+    assert.equal(player.currentTrack.id, songs[1].id); assert.equal(player.playing, true);
+    audio.dispatchEvent(new Event('error')); await tick();
+    assert.equal(attempts.length, 2); assert.equal(player.playing, false); assert.equal(player.wantsPlayback, false);
+    assert.equal(audio.src, ''); player.dispose();
+  }
+});
+
+test('an error in a paused stream does not start the next song; resume obtains fresh media at the saved position', async () => {
+  const song = neteaseTrack(cloudSong(42)), audio = new FakeAudio(); let attempts = 0;
+  const player = new MusicPlayer(state(), { resolveMedia: async () => ({ url: `cloud-${++attempts}`, release() {} }) }, () => song, audio);
+  await player.playQueue([song.id], song.id); player.seek(12); player.pause();
+  audio.error = { code: 2 }; audio.dispatchEvent(new Event('error')); await tick();
+  assert.equal(attempts, 1); assert.equal(player.playing, false); assert.equal(player.state.position, 12);
+  await player.resume(); assert.equal(attempts, 2); assert.equal(player.playing, true); assert.equal(audio.currentTime, 12); player.dispose();
+});
+
+test('expired online URLs are renewed on resume without losing position or repeating a rejected play', async () => {
+  class ExpiringAudio extends FakeAudio {
+    expired = false;
+    async play() { if (this.expired) { this.expired = false; throw new DOMException('URL expired', 'NotSupportedError'); } await super.play(); }
+  }
+  const song = neteaseTrack(cloudSong(42)), audio = new ExpiringAudio(); let attempts = 0;
+  const player = new MusicPlayer(state(), { resolveMedia: async () => ({ url: `cloud-${++attempts}`, release() {} }) }, () => song, audio);
+  await player.playQueue([song.id], song.id); player.seek(12); player.pause(); audio.expired = true;
+  await player.resume(); assert.equal(attempts, 2); assert.equal(audio.currentTime, 12); assert.equal(player.playing, true); player.dispose();
+});
+
+test('a rejected old resume cannot renew or replace a newer selected song', async () => {
+  class PendingPlayAudio extends FakeAudio {
+    pending = false; rejectPlay;
+    async play() { if (this.pending) { this.pending = false; await new Promise((_, reject) => { this.rejectPlay = reject; }); } else await super.play(); }
+  }
+  const songs = [neteaseTrack(cloudSong(42)), neteaseTrack(cloudSong(43))], audio = new PendingPlayAudio(), attempts = [];
+  const player = new MusicPlayer(state(), { resolveMedia: async song => { attempts.push(song.id); return { url: song.id, release() {} }; } }, id => songs.find(song => song.id === id), audio);
+  await player.playQueue(songs.map(song => song.id), songs[0].id); player.pause(); audio.pending = true;
+  const resume = player.resume(); await tick(); await player.playEntry(player.state.queue[1].id);
+  audio.rejectPlay(new DOMException('old URL failed', 'NotSupportedError')); await resume;
+  assert.deepEqual(attempts, songs.map(song => song.id)); assert.equal(player.currentTrack.id, songs[1].id); assert.equal(player.playing, true); player.dispose();
+});
