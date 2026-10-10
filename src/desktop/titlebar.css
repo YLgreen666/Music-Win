@@ -1,5 +1,5 @@
 html[data-desktop] { --desktop-titlebar-height: 32px; }
-html[data-desktop] #viewport { top: var(--desktop-titlebar-height); height: calc(100% - var(--desktop-titlebar-height) - var(--player-height, 86px)); }
+html[data-desktop] #viewport { top: var(--desktop-titlebar-height); height: calc(100dvh - var(--desktop-titlebar-height) - var(--player-height, 86px)); }
 html[data-desktop][data-music-boot="true"] #viewport { height: calc(100dvh - var(--desktop-titlebar-height)); }
 .desktop-titlebar { position: fixed; inset: 0 0 auto; height: 32px; z-index: 1000; display: flex; align-items: stretch; justify-content: space-between; color: var(--ink, #d8d7cd); background: #111b1e; border-bottom: 1px solid #73818440; font-family: MiSans, sans-serif; user-select: none; }
 .desktop-drag { flex: 1; display: flex; align-items: center; gap: 12px; padding: 0 16px; color: #e4e4da; }
