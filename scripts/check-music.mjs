@@ -264,6 +264,31 @@ const jsonResponse = body => new Response(JSON.stringify(body), { headers: { 'Co
 const cloudSong = id => ({ id, name: `Cloud ${id}`, ar: [{ name: 'Singer A' }, { name: 'Singer B' }], al: { id: 7, name: 'Cloud Album', picUrl: 'http://p1.music.126.net/cover.jpg' }, dt: 60000 });
 const loggedProvider = (fetcher, storage = sessionStorageFake()) => { storage.setItem('rhine-netease-session:https://api.test', JSON.stringify({ cookie: 'MUSIC_U=test-session', uid: 8, nickname: 'Test' })); return new NeteaseMusicProvider('https://api.test', fetcher, storage); };
 
+test('online covers recover native HTTP image headers without accepting non-images or oversized bodies', async () => {
+  const bytes = new Uint8Array([255, 216, 255, 217]);
+  const nativeResponse = (body, type) => {
+    // Match plugin-http: constructor has no headers; only the public property is replaced.
+    const response = new Response(body);
+    Object.defineProperty(response, 'headers', { value: new Headers({ 'content-type': type }) });
+    return response;
+  };
+  assert.equal((await nativeResponse(bytes, 'image/jpeg').blob()).type, '');
+  let result = () => nativeResponse(bytes, 'Image/JPEG; charset=binary');
+  const provider = new NeteaseMusicProvider('https://api.test', async () => result(), sessionStorageFake());
+  try {
+    const song = neteaseTrack(cloudSong(42)), cover = await provider.getCover(song);
+    assert.equal(cover.type, 'image/jpeg'); assert.deepEqual(new Uint8Array(await cover.arrayBuffer()), bytes);
+    result = () => new Response(bytes, { headers: { 'content-type': 'image/png' } });
+    assert.equal((await provider.getCover(song)).type, 'image/png');
+    result = () => nativeResponse('<html>error</html>', 'text/html');
+    assert.equal(await provider.getCover(song), undefined);
+    result = () => nativeResponse(new Uint8Array(2 * 1024 * 1024 + 1), 'image/jpeg');
+    assert.equal(await provider.getCover(song), undefined);
+    result = () => nativeResponse(new Uint8Array(), 'image/jpeg');
+    assert.equal(await provider.getCover(song), undefined);
+  } finally { provider.dispose(); }
+});
+
 test('online IDs, albums and duration are stable across API shapes and do not merge with local albums', () => {
   const song = neteaseTrack(cloudSong(42));
   assert.equal(song.id, 'netease:42'); assert.equal(song.duration, 60); assert.equal(song.artist, 'Singer A / Singer B'); assert.equal(song.coverUrl, 'https://p1.music.126.net/cover.jpg');

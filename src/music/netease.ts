@@ -168,7 +168,12 @@ export class NeteaseMusicProvider extends EventTarget implements MusicProvider {
         else { this.coverQueue.push(start); controller.signal.addEventListener('abort', canceled, { once: true }); }
       });
       const response = await this.fetcher(url.href, { credentials: 'omit', signal: controller.signal }); if (!response.ok) return;
-      const blob = await response.blob(); return blob.type.startsWith('image/') && blob.size <= 2 * 1024 * 1024 ? blob : undefined;
+      const blob = await response.blob();
+      // Tauri HTTP exposes network headers separately from Response's internal
+      // headers, so blob() may lose Content-Type even for a valid image.
+      const type = (blob.type || response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+      if (!type.startsWith('image/') || !blob.size || blob.size > 2 * 1024 * 1024) return;
+      return blob.type ? blob : new Blob([blob], { type });
     } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); this.requests.delete(controller); if (acquired) { this.coverActive--; this.coverQueue.shift()?.(); } }
   }
   async getLyrics(track: Track, signal?: AbortSignal) {
