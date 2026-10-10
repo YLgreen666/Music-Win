@@ -67,7 +67,8 @@ fn set_close_to_tray(app: tauri::AppHandle, enabled: bool) {
         .store(enabled, Ordering::Relaxed);
 }
 #[tauri::command]
-fn show_diagnostics(app: tauri::AppHandle) -> Result<(), String> {
+async fn show_diagnostics(app: tauri::AppHandle) -> Result<(), String> {
+    // WebView2 creation must run outside the synchronous IPC callback on Windows.
     if let Some(window) = app.get_webview_window("diagnostics") {
         window.set_focus().map_err(|e| e.to_string())?;
         return Ok(());
