@@ -97,9 +97,14 @@ export class DesktopHost {
         if (value.action === 'seek-by') player.seek(player.state.position + (value.offset ?? 0));
       })().catch(error => hooks.tell(error.message));
     });
-    await register<null>('host-quit', () => { void hooks.quit().then(() => invoke('finish_quit')).catch(() => hooks.tell('保存失败，暂未退出。请重试退出。')); });
+    await register<null>('host-quit', () => {
+      void hooks.quit().then(() => invoke('finish_quit')).catch(async () => {
+        await invoke('cancel_quit').catch(() => {}); hooks.tell('保存失败，暂未退出。请重试退出。');
+      });
+    });
   }
   async setCloseToTray(enabled: boolean) { await invoke('set_close_to_tray', { enabled }); }
+  async showDiagnostics() { await invoke('show_diagnostics'); }
   async saveBackup(value: string, name: string) { await invoke('save_backup', { value, name }); }
   async chooseLyrics() {
     const items = await this.files.choose(false); return items.find(item => /\.lrc$/i.test(item.file.name))?.file.text();

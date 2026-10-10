@@ -2,6 +2,8 @@
 
 基于 [LBEILC / RhineLabUI](https://github.com/LBEILC/RhineLabUI) 提交 `af8563bbc7ee60ffdad5635fec91e9ba7cc93a47` 的网页音乐播放器。保留原品牌、MiSans、完整开场、玻璃阵列、抽取、解密与 360° 查看器。使用 TypeScript、Three.js、Vite，没有引入前端框架。
 
+Windows 桌面测试版采用 Tauri 2 + WebView2，共用播放器核心。通过 [Windows app 云端构建](https://github.com/YLgreen666/Music-Win/actions/workflows/windows-app.yml) 下载 x64 安装包，本机无需安装 C++ Build Tools；运行版也无需 Node 服务。安装、升级、登录记忆和网页资料迁移见 [Windows 应用说明](docs/WINDOWS-APP.md)。目前为未签名测试版，实机播放和覆盖升级须独立验证。
+
 ## 本地启动
 
 需要 Node.js 22.18+（或 Node.js 24+）和 npm。在项目目录运行：

@@ -17,6 +17,7 @@ export function settingsContent(p: MusicPreferences) {
     ${isDesktop ? `<label class="check-setting"><span>关闭窗口时收起到托盘</span><input type="checkbox" data-preference="closeToTray" ${p.closeToTray !== false ? 'checked' : ''}></label>` : ''}
   </div>${qualityMarkup(p.rendering || qualityPresets[p.quality])}
   <div class="playlist-toolbar"><button data-action="replay">重播完整开场 ↗</button><button data-action="full-screen">全屏 ↗</button></div>
+  ${isDesktop ? '<section class="attribution"><h3>DIAGNOSTICS / 实机性能</h3><p>在 WebView2 中打开独立测试场景，查看实际 GPU、画质、帧间隔与绘制次数。仅使用合成歌曲，主场景暂时停止渲染，音乐继续播放。</p><button data-action="desktop-diagnostics">打开性能诊断 ↗</button></section>' : ''}
   <section class="attribution"><h3>NETEASE CLOUD / 网易云音乐</h3><p>扫码连接后可搜索歌曲、同步只读歌单，与本地音乐混合播放。${isDesktop ? '勾选记住登录后，凭据由 Windows 加密保存。' : '登录保存在当前标签页，关闭后重新扫码。'}</p><button data-action="netease">管理网易云连接 ↗</button></section>
   ${pwaSettingsMarkup()}
   <section class="attribution"><h3>BACKUP / 资料迁移</h3><p>备份歌曲索引、封面、歌词、歌单、收藏、队列与设置。音频和登录凭据不进入备份；迁移后重新选择原音乐目录即可关联本地歌曲。</p><div class="playlist-toolbar"><button data-action="backup-export">导出资料 ↗</button><button data-action="backup-import">导入资料 ↓</button><button data-action="backup-previous">导出上次导入前的资料</button></div></section>

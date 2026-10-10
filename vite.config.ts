@@ -13,7 +13,7 @@ const hasNovecento = ["Normal", "DemiBold", "Bold"].every(weight =>
   existsSync(`public/fonts/novecento/webFonts/NovecentoSansWide${weight}/font.woff2`),
 );
 export default defineConfig(({ mode }) => ({
-  build: mode === 'performance' ? { rollupOptions: { input: ['verification/music-performance.html', 'verification/cover-review.html'] } } : {},
+  build: mode === 'performance' ? { rollupOptions: { input: ['verification/music-performance.html', 'verification/cover-review.html'] } } : mode === 'desktop' ? { rollupOptions: { input: ['index.html', 'verification/music-performance.html'] } } : {},
   worker: { format: "es" },
   base: mode === "wallpaper" ? "./" : "/",
   define: {

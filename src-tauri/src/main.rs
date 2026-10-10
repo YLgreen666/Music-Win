@@ -3,7 +3,7 @@
 mod credentials;
 mod files;
 mod media;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager};
@@ -12,6 +12,7 @@ use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 #[derive(Default)]
 struct Host {
     quit: AtomicBool,
+    quit_revision: AtomicU64,
     close_to_tray: AtomicBool,
 }
 
@@ -20,13 +21,21 @@ fn show(app: &tauri::AppHandle) {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
-        let _ = app.emit("host-hidden", false);
+        let _ = app.emit(
+            "host-hidden",
+            app.get_webview_window("diagnostics").is_some(),
+        );
     }
 }
 fn request_quit(app: &tauri::AppHandle) {
     if app.state::<Host>().quit.swap(true, Ordering::SeqCst) {
         return;
     }
+    let revision = app
+        .state::<Host>()
+        .quit_revision
+        .fetch_add(1, Ordering::SeqCst)
+        + 1;
     let _ = app.save_window_state(StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED);
     let _ = app.emit("host-quit", ());
     // The frontend acknowledges after flushing IndexedDB and releasing resources.
@@ -34,7 +43,11 @@ fn request_quit(app: &tauri::AppHandle) {
     let handle = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_secs(10));
-        handle.exit(0);
+        let host = handle.state::<Host>();
+        if host.quit.load(Ordering::SeqCst) && host.quit_revision.load(Ordering::SeqCst) == revision
+        {
+            handle.exit(0);
+        }
     });
 }
 #[tauri::command]
@@ -42,10 +55,35 @@ fn finish_quit(app: tauri::AppHandle) {
     app.exit(0);
 }
 #[tauri::command]
+fn cancel_quit(app: tauri::AppHandle) {
+    let host = app.state::<Host>();
+    host.quit.store(false, Ordering::SeqCst);
+    host.quit_revision.fetch_add(1, Ordering::SeqCst);
+}
+#[tauri::command]
 fn set_close_to_tray(app: tauri::AppHandle, enabled: bool) {
     app.state::<Host>()
         .close_to_tray
         .store(enabled, Ordering::Relaxed);
+}
+#[tauri::command]
+fn show_diagnostics(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("diagnostics") {
+        window.set_focus().map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        "diagnostics",
+        tauri::WebviewUrl::App("verification/music-performance.html".into()),
+    )
+    .title("Rhine Music · 实机性能诊断")
+    .inner_size(1280.0, 850.0)
+    .use_https_scheme(true)
+    .build()
+    .map_err(|e| e.to_string())?;
+    let _ = app.emit("host-hidden", true);
+    Ok(())
 }
 
 fn main() {
@@ -136,6 +174,17 @@ fn main() {
         })
         .on_window_event(|window, event| {
             let app = window.app_handle();
+            if window.label() != "main" {
+                if window.label() == "diagnostics" && matches!(event, tauri::WindowEvent::Destroyed)
+                {
+                    if let Some(main) = app.get_webview_window("main") {
+                        let hidden = main.is_minimized().unwrap_or(false)
+                            || !main.is_visible().unwrap_or(true);
+                        let _ = app.emit("host-hidden", hidden);
+                    }
+                }
+                return;
+            }
             match event {
                 tauri::WindowEvent::CloseRequested { api, .. } => {
                     api.prevent_close();
@@ -144,6 +193,9 @@ fn main() {
                             StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED,
                         );
                         let _ = window.hide();
+                        if let Some(diagnostics) = app.get_webview_window("diagnostics") {
+                            let _ = diagnostics.close();
+                        }
                         let _ = app.emit("host-hidden", true);
                     } else {
                         request_quit(app);
@@ -151,7 +203,8 @@ fn main() {
                 }
                 tauri::WindowEvent::Resized(_) => {
                     let hidden = window.is_minimized().unwrap_or(false)
-                        || !window.is_visible().unwrap_or(true);
+                        || !window.is_visible().unwrap_or(true)
+                        || app.get_webview_window("diagnostics").is_some();
                     let _ = app.emit("host-hidden", hidden);
                 }
                 tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {
@@ -181,6 +234,8 @@ fn main() {
             credentials::save_login,
             media::update_media,
             set_close_to_tray,
+            show_diagnostics,
+            cancel_quit,
             finish_quit
         ])
         .run(tauri::generate_context!())

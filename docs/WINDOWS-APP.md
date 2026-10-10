@@ -48,4 +48,6 @@ npm run build:desktop
 
 云端测试和构建只是第一层验证。首包生成后仍需在 WebView2 验证实际 GPU、原始画质、两种外观、音频格式、大文件 Range 跳转、Web Audio、隐藏窗口连续播放、托盘与媒体键、扫码及登录恢复、退出释放、覆盖升级和数据保留。朋友电脑需独立复测。《100种生活》需在真实账号下确认资源限制与加载错误；不以匿名 API 或安装包成功替代该测试。
 
+设置中“打开性能诊断”会在独立 WebView2 窗口打开已有合成歌曲测试场景，显示实际 GPU、渲染分辨率、CPU/GPU 计时、P50/P95 和纹理上传信息。诊断期间主场景暂停渲染，歌曲继续播放；关闭诊断后恢复。诊断不读取音乐库或凭据，不自动改变原始画质。
+
 来源：[Tauri GitHub 构建](https://v2.tauri.app/distribute/pipelines/github/)、[Windows 安装器](https://v2.tauri.app/distribute/windows-installer/)、[asset Range 实现](https://github.com/tauri-apps/tauri/blob/dev/crates/tauri/src/protocol/asset.rs)、[lofty](https://docs.rs/lofty/latest/lofty/)、[souvlaki](https://github.com/Sinono3/souvlaki)、[DPAPI](https://learn.microsoft.com/en-us/windows/win32/api/dpapi/nf-dpapi-cryptprotectdata)。

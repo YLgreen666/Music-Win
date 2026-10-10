@@ -384,6 +384,7 @@ async function runAction(button: HTMLElement) {
   if (action === 'import') { importModal(); return; }
   if (action === 'search') { searchModal(); return; }
   if (action === 'settings') { settingsModal(); return; }
+  if (action === 'desktop-diagnostics') { await desktop?.showDiagnostics(); return; }
   if (action === 'backup-export') { player.capturePosition(); await downloadBackup(await exportBackup(library.snapshot)); return; }
   if (action === 'backup-previous') { const value = await library.previousImportBackup(); if (value) await downloadBackup(value, 'rhine-music-before-import'); else tell('尚无导入前的资料备份'); return; }
   if (action === 'backup-import') { $('#backup-input').click(); return; }
@@ -617,7 +618,7 @@ async function initialize() {
   if (desktop) await desktop.attach({
     player: () => player,
     hidden: hidden => { desktopHidden = hidden; lifecycle.setHidden(hidden || document.hidden); lastFrame = performance.now(); if (hidden && player?.capturePosition()) { library.scheduleSave(); void library.flush(); } },
-    quit: async () => { player?.capturePosition(); library.scheduleSave(); await library.flush(true); await library.netease.flushLogin(); lifecycle.dispose(); },
+    quit: async () => { player?.pause(); player?.capturePosition(); library.scheduleSave(); await library.flush(true); await library.netease.flushLogin(); lifecycle.dispose(); },
     drop: async items => { if (ready) { closeModal(); await library.importItems(items); } },
     tell,
   });

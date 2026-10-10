@@ -20,6 +20,7 @@
       "assetProtocol": { "enable": true, "scope": [] }
     }
   },
+  "plugins": { "http": { "scopeRedirects": true } },
   "bundle": {
     "active": true, "targets": ["nsis"],
     "icon": ["icons/icon.ico", "icons/icon.png"],
