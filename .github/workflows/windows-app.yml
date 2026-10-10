@@ -63,7 +63,7 @@ jobs:
           $installers = Get-ChildItem src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
           if ($installers.Count -eq 0) { throw 'No NSIS installer was produced' }
           $installers | ForEach-Object { Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256 } | Format-Table -AutoSize | Out-String | Set-Content installer-sha256.txt
-      - name: Upload private test package
+      - name: Upload test package
         uses: actions/upload-artifact@v4
         with:
           name: rhine-music-windows-x64-${{ github.run_number }}

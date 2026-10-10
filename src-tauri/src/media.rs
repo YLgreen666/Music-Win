@@ -2,6 +2,7 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Deserialize;
 use souvlaki::{
     MediaControlEvent, MediaControls, MediaMetadata, MediaPlayback, MediaPosition, PlatformConfig,
+    SeekDirection,
 };
 use std::{
     fs,
@@ -36,6 +37,25 @@ pub fn start(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|_| "Media lock")? = Some(sender);
     let app = app.clone();
     std::thread::spawn(move || {
+        struct ComApartment;
+        impl Drop for ComApartment {
+            fn drop(&mut self) {
+                unsafe {
+                    windows_sys::Win32::System::Com::CoUninitialize();
+                }
+            }
+        }
+        let initialized = unsafe {
+            windows_sys::Win32::System::Com::CoInitializeEx(
+                std::ptr::null(),
+                windows_sys::Win32::System::Com::COINIT_MULTITHREADED as u32,
+            )
+        };
+        if initialized < 0 {
+            let _ = app.emit("host-warning", "系统媒体控制初始化失败");
+            return;
+        }
+        let _apartment = ComApartment;
         // Controls stay on their owning thread; only the message sender is shared.
         let Ok(mut controls) = MediaControls::new(PlatformConfig {
             dbus_name: "rhine-music",
@@ -58,6 +78,8 @@ pub fn start(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                         serde_json::json!({"action":"seek","position":position.as_secs_f64()})
                     }
                     MediaControlEvent::Stop => serde_json::json!({"action":"pause"}),
+                    MediaControlEvent::Seek(direction) => serde_json::json!({"action":"seek-by","offset":if direction == SeekDirection::Forward {10.0} else {-10.0}}),
+                    MediaControlEvent::SeekBy(direction, amount) => serde_json::json!({"action":"seek-by","offset":amount.as_secs_f64() * if direction == SeekDirection::Forward {1.0} else {-1.0}}),
                     _ => return,
                 };
                 let _ = event_app.emit("host-media-action", value);

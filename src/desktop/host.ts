@@ -86,7 +86,7 @@ export class DesktopHost {
     await register<boolean>('host-hidden', hooks.hidden);
     await register<string>('host-warning', hooks.tell);
     await register<Entry[]>('host-drop', entries => { void importEntries(entries).then(hooks.drop).catch(error => hooks.tell(error.message)); });
-    await register<{ action: string; position?: number }>('host-media-action', value => {
+    await register<{ action: string; position?: number; offset?: number }>('host-media-action', value => {
       const player = hooks.player(); if (!player) return;
       void (async () => {
         if (value.action === 'toggle') await player.toggle();
@@ -94,6 +94,7 @@ export class DesktopHost {
         if (value.action === 'pause') player.pause();
         if (value.action === 'next' || value.action === 'previous') await player.advance(value.action === 'next' ? 1 : -1);
         if (value.action === 'seek') player.seek(value.position ?? 0);
+        if (value.action === 'seek-by') player.seek(player.state.position + (value.offset ?? 0));
       })().catch(error => hooks.tell(error.message));
     });
     await register<null>('host-quit', () => { void hooks.quit().then(() => invoke('finish_quit')).catch(() => hooks.tell('保存失败，暂未退出。请重试退出。')); });
@@ -109,7 +110,18 @@ export class DesktopHost {
     let cover: Promise<string | undefined> = Promise.resolve(undefined);
     if (track?.cover) {
       let value = this.covers.get(track.cover);
-      if (!value) { value = track.cover.arrayBuffer().then(bytes => { let text = ''; for (const byte of new Uint8Array(bytes)) text += String.fromCharCode(byte); return btoa(text); }); this.covers.set(track.cover, value); }
+      if (!value) {
+        const source = track.cover;
+        value = (async () => {
+          const bitmap = await createImageBitmap(source);
+          try {
+            const scale = Math.min(1, 320 / Math.max(bitmap.width, bitmap.height)), canvas = new OffscreenCanvas(Math.max(1, Math.round(bitmap.width * scale)), Math.max(1, Math.round(bitmap.height * scale)));
+            canvas.getContext('2d')!.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+            const png = await canvas.convertToBlob({ type: 'image/png' });
+            let text = ''; for (const byte of new Uint8Array(await png.arrayBuffer())) text += String.fromCharCode(byte); return btoa(text);
+          } finally { bitmap.close(); }
+        })(); this.covers.set(source, value);
+      }
       cover = value;
     }
     const state = { title: track?.title || '', artist: track?.artist || '', album: track?.album || '', position: player.state.position, duration: player.duration, playing: player.playing };
