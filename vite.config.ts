@@ -18,7 +18,8 @@ export default defineConfig(({ mode }) => ({
   base: mode === "wallpaper" ? "./" : "/",
   define: {
     __RHINE_MODELS__: JSON.stringify(Object.fromEntries(models.map(model => [model.key,model.fileName]))),
-    __RHINE_NOVECENTO__: JSON.stringify(hasNovecento),
+    __RHINE_NOVECENTO__: JSON.stringify(mode !== 'desktop' && hasNovecento),
+    __RHINE_DESKTOP__: JSON.stringify(mode === 'desktop'),
   },
   plugins: [{
     name: "versioned-model-assets", apply: "build",
@@ -30,5 +31,8 @@ export default defineConfig(({ mode }) => ({
         tag: "script", children: readFileSync("wallpaper/host.js", "utf8"), injectTo: "head-prepend" as const,
       }] };
     },
+  }] : []), ...(mode === 'desktop' ? [{
+    name: 'desktop-entry',
+    transformIndexHtml(html: string) { return html.replace(/\s*<link rel="manifest"[^>]*>/, ''); },
   }] : [])],
 }));

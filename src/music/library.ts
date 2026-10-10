@@ -1,9 +1,9 @@
 import { MusicDatabase, defaultPlayback, defaultPreferences } from './database.ts';
 import { BrowserFileAccess, LocalMusicProvider } from './file-access.ts';
 import { albumCollections, reconcilePlayback } from './domain.ts';
-import { NeteaseMusicProvider } from './netease.ts';
+import { NeteaseMusicProvider, type LoginVault } from './netease.ts';
 import { MusicProviders } from './providers.ts';
-import type { Collection, ImportItem, ImportProgress, LibrarySnapshot, Track } from './types.ts';
+import type { Collection, ImportItem, ImportProgress, LibraryFileAccess, LibrarySnapshot, Track } from './types.ts';
 
 type PickerWindow = Window & {
   showOpenFilePicker?: (options: object) => Promise<FileSystemFileHandle[]>;
@@ -15,9 +15,14 @@ const audioPattern = /\.(mp3|flac|m4a|aac|wav|ogg|opus|aiff?|wma)$/i;
 export const isAudioFile = (name: string) => audioPattern.test(name);
 export class MusicLibrary extends EventTarget {
   snapshot: LibrarySnapshot = { tracks: [], playlists: [], favorites: [], playback: defaultPlayback(), preferences: defaultPreferences() };
-  readonly files = new BrowserFileAccess();
-  readonly netease = new NeteaseMusicProvider();
-  readonly provider = new MusicProviders([new LocalMusicProvider(() => this.snapshot.tracks.filter(track => track.providerId === 'local'), this.files), this.netease]);
+  readonly files: LibraryFileAccess;
+  readonly netease: NeteaseMusicProvider;
+  readonly provider: MusicProviders;
+  constructor(options: { files?: LibraryFileAccess; fetch?: typeof fetch; login?: LoginVault } = {}) {
+    super(); this.files = options.files ?? new BrowserFileAccess();
+    this.netease = new NeteaseMusicProvider(undefined, options.fetch, undefined, options.login);
+    this.provider = new MusicProviders([new LocalMusicProvider(() => this.snapshot.tracks.filter(track => track.providerId === 'local'), this.files), this.netease]);
+  }
   private database = new MusicDatabase();
   private worker?: Worker;
   private parseRequest = 0;
@@ -54,14 +59,24 @@ export class MusicLibrary extends EventTarget {
     clearTimeout(this.saveTimer);
     this.saveTimer = setTimeout(() => { void this.flush(); }, 350);
   }
-  async flush() {
+  async flush(required = false) {
     clearTimeout(this.saveTimer);
     if (!this.dirty) return this.saving;
     this.dirty = false;
     const snapshot = { ...this.snapshot, roots: this.roots };
     this.saving = this.saving.catch(() => {}).then(() => this.database.save(snapshot));
     try { await this.saving; }
-    catch (error) { this.dirty = true; if (!this.disposed) this.dispatchEvent(new CustomEvent('error', { detail: `音乐库保存失败：${error instanceof Error ? error.message : error}。请检查浏览器存储空间。` })); }
+    catch (error) { this.dirty = true; if (!this.disposed) this.dispatchEvent(new CustomEvent('error', { detail: `音乐库保存失败：${error instanceof Error ? error.message : error}。请检查浏览器存储空间。` })); if (required) throw error; }
+  }
+  async protectImport(value: unknown) { await this.database.saveImportBackup(value); }
+  async previousImportBackup() { return this.database.loadImportBackup(); }
+  async restoreBackup(snapshot: LibrarySnapshot) {
+    const state = this.snapshot.playback;
+    Object.assign(state, snapshot.playback);
+    Object.assign(this.snapshot, snapshot, { playback: state });
+    this.roots = this.snapshot.roots ?? [];
+    await this.files.refreshAvailability(this.tracks.filter(track => track.providerId === 'local'));
+    this.changed(); await this.flush(true);
   }
   dispose() {
     if (this.disposed) return;
@@ -139,7 +154,14 @@ export class MusicLibrary extends EventTarget {
     if (!handle) this.files.temporary.set(id, file); else this.files.temporary.delete(id);
     this.changed();
   }
+  async relinkDesktop(id: string, item: ImportItem) {
+    const track = this.track(id); if (!track || !item.desktopFile) return;
+    track.desktopFile = item.desktopFile; track.fileName = item.file.name; track.size = item.desktopFile.size;
+    track.modified = item.desktopFile.modified; track.handle = undefined; track.availability = 'ready';
+    this.files.temporary.delete(id); this.changed();
+  }
   async chooseFiles() {
+    if (this.files.choose) { await this.chooseNative(false); return true; }
     const picker = (window as PickerWindow).showOpenFilePicker;
     if (!picker) return false;
     const handles = await picker({ multiple: true, types: [{ description: '音乐与歌词', accept: { 'audio/*': ['.mp3', '.flac', '.m4a', '.aac', '.wav', '.ogg', '.opus'], 'text/plain': ['.lrc'] } }] });
@@ -148,6 +170,7 @@ export class MusicLibrary extends EventTarget {
     await this.importItems(items); return true;
   }
   async chooseDirectory() {
+    if (this.files.choose) { await this.chooseNative(true); return true; }
     const picker = (window as PickerWindow).showDirectoryPicker;
     if (!picker) return false;
     const handle = await picker({ mode: 'read', id: 'rhine-music', startIn: 'music' });
@@ -177,13 +200,20 @@ export class MusicLibrary extends EventTarget {
       if (!this.cancelRequested) await this.processItems(items);
     } finally { this.importing = false; this.dispatchEvent(new Event('importend')); this.changed(); }
   }
+  private async chooseNative(directory: boolean) {
+    if (this.importing) throw new Error('已有导入任务正在运行');
+    this.importing = true; this.cancelRequested = false;
+    this.progress({ completed: 0, total: 0, name: '等待选择并扫描音乐文件…', failed: 0, canceled: false });
+    try { const items = await this.files.choose!(directory); if (!this.cancelRequested) await this.processItems(items); }
+    finally { this.importing = false; this.dispatchEvent(new Event('importend')); this.changed(); }
+  }
   async importItems(items: ImportItem[]) {
     if (this.importing) throw new Error('已有导入任务正在运行');
     this.importing = true; this.cancelRequested = false;
     try { await this.processItems(items); }
     finally { this.importing = false; this.dispatchEvent(new Event('importend')); this.changed(); }
   }
-  cancelImport() { this.cancelRequested = true; this.worker?.terminate(); this.worker = undefined; this.pendingReject?.(new Error('导入已取消')); this.pendingReject = undefined; }
+  cancelImport() { this.cancelRequested = true; this.files.cancelImport?.(); this.worker?.terminate(); this.worker = undefined; this.pendingReject?.(new Error('导入已取消')); this.pendingReject = undefined; }
   private progress(detail: ImportProgress) { this.dispatchEvent(new CustomEvent('progress', { detail })); }
   private async parse(file: File): Promise<Metadata> {
     this.worker ??= new Worker(new URL('./metadata-worker.ts', import.meta.url), { type: 'module' });
@@ -208,10 +238,19 @@ export class MusicLibrary extends EventTarget {
       if (this.cancelRequested) break;
       this.progress({ completed, total: audioItems.length, name: item.file.name, failed, canceled: false });
       let metadata: Metadata = {};
-      try { metadata = await this.parse(item.file); }
+      try { metadata = this.files.parse ? await this.files.parse(item) : await this.parse(item.file); }
       catch { if (this.cancelRequested) break; failed++; }
-      const sourceId = item.rootId ? `${item.rootId}:${item.relativePath}` : `${item.file.name}:${item.file.size}:${item.file.lastModified}`;
+      if (this.cancelRequested) break;
+      const sourceId = item.desktopFile ? `desktop:${item.desktopFile.path.toLowerCase()}` : item.rootId ? `${item.rootId}:${item.relativePath}` : `${item.file.name}:${item.file.size}:${item.file.lastModified}`;
       let existing = this.tracks.find(track => track.sourceId === sourceId);
+      if (!existing && item.desktopFile) {
+        // Migrated indexes retain their IDs when the original directory is selected.
+        // Ambiguous equal-name files require individual relinking rather than guessing.
+        const candidates = this.tracks.filter(track => track.providerId === 'local' && track.availability === 'missing' &&
+          track.fileName === item.file.name && track.size === item.desktopFile!.size &&
+          (!track.relativePath || track.relativePath === item.relativePath));
+        if (candidates.length === 1) existing = candidates[0];
+      }
       if (!existing && item.handle) for (const track of this.tracks) {
         if (!track.handle || track.fileName !== item.file.name) continue;
         try { if (await item.handle.isSameEntry(track.handle)) { existing = track; break; } } catch { /* unavailable old handle */ }
@@ -222,12 +261,12 @@ export class MusicLibrary extends EventTarget {
         title: metadata.title || item.file.name.replace(/\.[^.]+$/, ''), artist: metadata.artist || '未知歌手',
         album: metadata.album || '', albumArtist: metadata.albumArtist || '', trackNumber: metadata.trackNumber || 0,
         duration: metadata.duration || 0, format: metadata.format || item.file.name.split('.').pop()!.toUpperCase(),
-        fileName: item.file.name, folder, size: item.file.size, modified: item.file.lastModified,
+        fileName: item.file.name, folder, size: item.desktopFile?.size ?? item.file.size, modified: item.desktopFile?.modified ?? item.file.lastModified,
         cover: metadata.cover || existing?.cover, lyrics: lyrics.get(item.relativePath.replace(/\.[^.]+$/, '').toLowerCase()) || existing?.lyrics,
-        handle: item.handle, rootId: item.rootId, relativePath: item.relativePath, availability: item.handle ? 'ready' : 'temporary',
+        handle: item.handle, desktopFile: item.desktopFile, rootId: item.rootId, relativePath: item.relativePath, availability: item.desktopFile || item.handle ? 'ready' : 'temporary',
       };
       if (existing) this.snapshot.tracks[this.tracks.indexOf(existing)] = track; else this.snapshot.tracks.push(track);
-      if (!item.handle) this.files.temporary.set(track.id, item.file);
+      if (!item.handle && !item.desktopFile) this.files.temporary.set(track.id, item.file);
       completed++;
       if (completed % 20 === 0) { this.changed(); await new Promise(resolve => setTimeout(resolve, 0)); }
     }

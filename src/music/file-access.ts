@@ -47,7 +47,8 @@ export class LocalMusicProvider implements MusicProvider {
   readonly files: FileAccessAdapter;
   constructor(tracks: () => Track[], files: FileAccessAdapter) { this.tracks = tracks; this.files = files; }
   async search(query: string) { return this.tracks().filter(track => matchesTrack(track, query)); }
-  async resolveMedia(track: Track): Promise<MediaResource> {
+  async resolveMedia(track: Track, signal?: AbortSignal): Promise<MediaResource> {
+    if (this.files.resolveMedia) return this.files.resolveMedia(track, signal);
     const url = URL.createObjectURL(await this.files.read(track));
     return { url, release: () => URL.revokeObjectURL(url) };
   }

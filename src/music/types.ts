@@ -22,6 +22,7 @@ export interface Track {
   playbackNotice?: string;
   lyrics?: string;
   handle?: FileSystemFileHandle;
+  desktopFile?: { path: string; size: number; modified: number };
   rootId?: string;
   relativePath?: string;
   availability: 'ready' | 'permission' | 'missing' | 'temporary';
@@ -57,6 +58,7 @@ export interface MusicPreferences {
   quality: 'performance' | 'original' | 'high' | 'ultra';
   rendering?: import('../render-quality').RenderQuality;
   collectionMode: 'albums' | 'playlists';
+  closeToTray?: boolean;
 }
 export interface LibrarySnapshot {
   roots?: { id: string; handle: FileSystemDirectoryHandle }[];
@@ -77,6 +79,15 @@ export interface MusicProvider {
 export interface FileAccessAdapter {
   read(track: Track): Promise<File>;
   requestAccess(track: Track): Promise<boolean>;
+  resolveMedia?(track: Track, signal?: AbortSignal): Promise<MediaResource>;
 }
-export type ImportItem = { file: File; handle?: FileSystemFileHandle; rootId?: string; relativePath: string };
+export type TrackMetadata = Partial<Pick<Track, 'title' | 'artist' | 'album' | 'albumArtist' | 'trackNumber' | 'duration' | 'format' | 'cover'>>;
+export interface LibraryFileAccess extends FileAccessAdapter {
+  readonly temporary: Map<string, File>;
+  refreshAvailability(tracks: Track[]): Promise<void>;
+  choose?(directory: boolean): Promise<ImportItem[]>;
+  parse?(item: ImportItem): Promise<TrackMetadata>;
+  cancelImport?(): void;
+}
+export type ImportItem = { file: File; handle?: FileSystemFileHandle; rootId?: string; relativePath: string; desktopFile?: Track['desktopFile'] };
 export type ImportProgress = { completed: number; total: number; name: string; failed: number; canceled: boolean };

@@ -2,6 +2,8 @@ node_modules/
 .cache/
 backups/
 dist/
+dist-desktop/
+src-tauri/target/
 .tools/
 *.mp4
 *.blend1

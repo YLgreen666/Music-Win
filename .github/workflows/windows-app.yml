@@ -1,0 +1,74 @@
+name: Windows app
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/windows-app]
+    paths:
+      - 'src/**'
+      - 'src-tauri/**'
+      - 'public/**'
+      - 'scripts/**'
+      - 'index.html'
+      - 'package*.json'
+      - 'vite.config.ts'
+      - 'tsconfig.json'
+      - '.github/workflows/windows-app.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-app-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Install JavaScript dependencies
+        run: npm ci
+      - name: Test shared player
+        run: npm test
+      - name: TypeScript
+        run: npm run typecheck
+      - name: Build website
+        run: npm run build
+      - name: Build desktop resources
+        run: npm run build:desktop
+      - name: Rust format
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+      - name: Rust tests
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+      - name: Rust checks
+        run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml -- -D warnings
+      - name: Package Windows x64
+        run: npm run desktop:build -- --ci
+      - name: Identify installer
+        shell: pwsh
+        run: |
+          $installers = Get-ChildItem src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+          if ($installers.Count -eq 0) { throw 'No NSIS installer was produced' }
+          $installers | ForEach-Object { Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256 } | Format-Table -AutoSize | Out-String | Set-Content installer-sha256.txt
+      - name: Upload private test package
+        uses: actions/upload-artifact@v4
+        with:
+          name: rhine-music-windows-x64-${{ github.run_number }}
+          path: |
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+            installer-sha256.txt
+          if-no-files-found: error
+          retention-days: 14

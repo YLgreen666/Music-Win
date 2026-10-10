@@ -1,0 +1,32 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Rhine Music",
+  "version": "0.1.0",
+  "identifier": "cc.rhine.music-player",
+  "build": {
+    "beforeDevCommand": "npm run dev -- --port 1420 --strictPort",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build:desktop",
+    "frontendDist": "../dist-desktop"
+  },
+  "app": {
+    "windows": [{
+      "label": "main", "title": "Rhine Music", "width": 1440, "height": 960,
+      "minWidth": 640, "minHeight": 540, "decorations": false,
+      "useHttpsScheme": true, "dragDropEnabled": true
+    }],
+    "security": {
+      "csp": null,
+      "assetProtocol": { "enable": true, "scope": [] }
+    }
+  },
+  "bundle": {
+    "active": true, "targets": ["nsis"],
+    "icon": ["icons/icon.ico", "icons/icon.png"],
+    "copyright": "Rhine Music contributors; based on LBEILC / RhineLabUI (MIT)",
+    "windows": {
+      "webviewInstallMode": { "type": "embedBootstrapper", "silent": true },
+      "nsis": { "installMode": "currentUser", "languages": ["SimpChinese", "English"], "displayLanguageSelector": false }
+    }
+  }
+}

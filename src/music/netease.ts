@@ -7,6 +7,7 @@ export type NeteasePlaylist = { id: number; name: string; trackCount: number; cr
 type Session = { cookie: string; uid: number; nickname: string };
 type ApiBody = { code?: number; message?: string; msg?: string; [key: string]: unknown };
 type StorageLike = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
+export interface LoginVault { load(): Promise<string | null>; save(value: string | null): Promise<void> }
 export class NeteaseConnectionError extends Error {
   readonly endpoint: string;
   readonly path: string;
@@ -41,14 +42,29 @@ export class NeteaseMusicProvider extends EventTarget implements MusicProvider {
   private requestPrefix = Math.random().toString(36).slice(2);
   private requestSequence = 0;
   private fetcher: typeof fetch;
-  constructor(endpoint = NETEASE_API, fetcher: typeof fetch = fetch, storage?: StorageLike) {
+  private vault?: LoginVault;
+  private vaultLoaded = false;
+  private vaultSaving = Promise.resolve();
+  rememberLogin = true;
+  constructor(endpoint = NETEASE_API, fetcher: typeof fetch = fetch, storage?: StorageLike, vault?: LoginVault) {
     // Native Window.fetch requires its global receiver. Calling a stored copy
     // as this.fetcher otherwise throws Illegal invocation before any request.
     super(); this.fetcher = fetcher.bind(globalThis); this.endpoint = endpoint.replace(/\/$/, ''); this.storageKey = `rhine-netease-session:${this.endpoint}`;
-    try { this.storage = storage ?? (typeof sessionStorage !== 'undefined' ? sessionStorage : undefined); const stored = JSON.parse(this.storage?.getItem(this.storageKey) || 'null'); if (stored && typeof stored.cookie === 'string' && typeof stored.uid === 'number' && typeof stored.nickname === 'string') this.session = stored; } catch { /* Storage may be disabled. */ }
+    this.vault = vault;
+    try { this.storage = vault ? undefined : storage ?? (typeof sessionStorage !== 'undefined' ? sessionStorage : undefined); const stored = JSON.parse(this.storage?.getItem(this.storageKey) || 'null'); if (stored && typeof stored.cookie === 'string' && typeof stored.uid === 'number' && typeof stored.nickname === 'string') this.session = stored; } catch { /* Storage may be disabled. */ }
   }
   get account() { return this.session ? { uid: this.session.uid, nickname: this.session.nickname } : undefined; }
-  private persist() { try { if (this.session) this.storage?.setItem(this.storageKey, JSON.stringify(this.session)); else this.storage?.removeItem(this.storageKey); } catch { /* Keep an in-memory session when storage is blocked. */ } this.dispatchEvent(new Event('auth')); }
+  get desktopLogin() { return !!this.vault; }
+  setRememberLogin(value: boolean) { this.rememberLogin = value; this.persist(); }
+  async flushLogin() { await this.vaultSaving; }
+  private persist() {
+    if (this.vault) {
+      const value = this.rememberLogin && this.session ? JSON.stringify(this.session) : null;
+      this.vaultSaving = this.vaultSaving.catch(() => {}).then(() => this.vault!.save(value));
+      void this.vaultSaving.catch(() => this.dispatchEvent(new CustomEvent('credential-error', { detail: '登录记忆保存失败，本次连接仍可使用。' })));
+    } else { try { if (this.session) this.storage?.setItem(this.storageKey, JSON.stringify(this.session)); else this.storage?.removeItem(this.storageKey); } catch { /* Keep an in-memory session when storage is blocked. */ } }
+    this.dispatchEvent(new Event('auth'));
+  }
   disconnect() { ++this.sessionRevision; this.session = undefined; this.persist(); }
   async request<T extends ApiBody>(path: string, params: Record<string, unknown> = {}, signal?: AbortSignal, cookie = this.session?.cookie): Promise<T> {
     if (this.closed) throw new DOMException('页面已关闭', 'AbortError');
@@ -88,6 +104,12 @@ export class NeteaseMusicProvider extends EventTarget implements MusicProvider {
     } finally { clearTimeout(timeout); signal?.removeEventListener('abort', abort); this.requests.delete(controller); }
   }
   async restoreSession(signal?: AbortSignal) {
+    if (this.vault && !this.vaultLoaded) {
+      this.vaultLoaded = true; const revision = this.sessionRevision;
+      const raw = await this.vault.load();
+      if (revision !== this.sessionRevision || this.closed) return false;
+      try { const stored = JSON.parse(raw || 'null'); if (stored && typeof stored.cookie === 'string' && Number.isFinite(stored.uid) && typeof stored.nickname === 'string') this.session = stored; } catch { await this.vault.save(null); }
+    }
     if (!this.session) return false;
     const revision = this.sessionRevision;
     const result = await this.request<ApiBody & { data: { account?: { id: number }; profile?: { nickname: string } } }>('/login/status', {}, signal);

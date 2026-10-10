@@ -29,13 +29,13 @@ export class NeteasePanel {
     const account = this.library.netease.account;
     return `<div class="cloud-toolbar"><span>${account ? `已登录 · ${esc(account.nickname)}` : '尚未登录网易云'}</span><div><button data-action="cloud-login">${account ? '切换账号 / 扫码' : '扫码登录'}</button>${account ? '<button data-action="cloud-playlists">我的网易云歌单</button><button data-action="cloud-logout">退出连接</button>' : ''}</div></div><form id="cloud-search-form" class="search-field"><span>⌕</span><input name="query" id="cloud-query" aria-label="搜索网易云音乐" placeholder="搜索网易云歌曲、歌手" value="${esc(this.query)}" autocomplete="off" required maxlength="200"><button class="primary-action" type="submit">搜索</button></form>`;
   }
-  open() { this.cancel(); this.screen = 'home'; this.hooks.open('网易云音乐', `${this.header()}<p class="panel-intro">扫码连接网易云后，可搜索播放歌曲、读取你的歌单，并与本地音乐一起加入队列。</p><p class="help-note">登录保存在当前标签页，刷新可恢复，关闭标签页后需要重新扫码。音频直接从网易云加载；可播放范围以账号和歌曲权限为准。</p><p class="help-note">API 服务：${esc(this.library.netease.endpoint)}</p>`); }
+  open() { this.cancel(); this.screen = 'home'; this.hooks.open('网易云音乐', `${this.header()}<p class="panel-intro">扫码连接网易云后，可搜索播放歌曲、读取你的歌单，并与本地音乐一起加入队列。</p><p class="help-note">${this.library.netease.desktopLogin ? '记住登录时由 Windows 加密保存，退出连接会清除凭据。' : '登录保存在当前标签页，刷新可恢复，关闭标签页后需要重新扫码。'}音频直接从网易云加载；可播放范围以账号和歌曲权限为准。</p><p class="help-note">API 服务：${esc(this.library.netease.endpoint)}</p>`); }
   async login() {
     const { signal, generation } = this.operation(); this.screen = 'qr';
     this.hooks.open('扫码登录网易云', '<div class="panel-empty" role="status">正在生成登录二维码…</div>');
     try {
       const qr = await this.library.netease.createQr(signal); if (!this.current(generation)) return;
-      this.hooks.open('扫码登录网易云', `<div class="cloud-login"><img src="${esc(qr.image)}" alt="网易云音乐登录二维码"><div><p>用网易云音乐 App 扫码，并在手机上确认登录。</p><p id="cloud-login-status" role="status">等待扫码</p><button data-action="cloud-login">刷新二维码 ↻</button><p class="help-note">二维码失效后可刷新。登录仅用于连接你的 API 服务和网易云。</p></div></div>`);
+      this.hooks.open('扫码登录网易云', `<div class="cloud-login"><img src="${esc(qr.image)}" alt="网易云音乐登录二维码"><div><p>用网易云音乐 App 扫码，并在手机上确认登录。</p>${this.library.netease.desktopLogin ? `<label class="check-setting"><input id="remember-login" type="checkbox" ${this.library.netease.rememberLogin ? 'checked' : ''}>记住登录</label>` : ''}<p id="cloud-login-status" role="status">等待扫码</p><button data-action="cloud-login">刷新二维码 ↻</button><p class="help-note">二维码失效后可刷新。登录仅用于连接你的 API 服务和网易云。</p></div></div>`);
       const deadline = Date.now() + 180000;
       const poll = async () => {
         if (!this.current(generation) || signal.aborted) return;

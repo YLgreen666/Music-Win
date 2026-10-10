@@ -34,6 +34,13 @@ import { activeLyric, formatTime, matchesTrack, parseLrc } from './music/domain'
 import { archiveColumns, columnFiles, fileLocation, musicColumns, musicTrack, records, setMusicCatalog } from './data';
 import { wrap, type ArchiveNavigation } from './archive-loop';
 import type { Collection, ImportItem, ImportProgress, LyricLine, PlaybackMode, Track } from './music/types';
+import { isDesktop } from './desktop/detect';
+import { exportBackup, mergeBackup, readBackup } from './music/backup';
+import type { LibrarySnapshot } from './music/types';
+
+const desktop = isDesktop ? new (await import('./desktop/host')).DesktopHost() : undefined;
+let desktopHidden = false;
+let pendingBackup: LibrarySnapshot | undefined;
 
 const $ = <T extends HTMLElement = HTMLElement>(selector: string) => document.querySelector<T>(selector)!;
 $('#stage').innerHTML = musicShell;
@@ -56,9 +63,10 @@ $('#viewport').insertAdjacentHTML('afterend', `
   <input id="folder-input" type="file" webkitdirectory multiple hidden>
   <input id="lyrics-input" type="file" accept=".lrc,text/plain" hidden>
   <input id="relink-input" type="file" accept="audio/*,.flac,.m4a,.opus" hidden>
+  <input id="backup-input" type="file" accept=".json,application/json" hidden>
   <div id="music-toast" class="music-toast" role="status"></div>`);
 
-const library = new MusicLibrary();
+const library = new MusicLibrary(desktop ? { files: desktop.files, fetch: desktop.fetch, login: desktop.login } : {});
 let player: MusicPlayer;
 let scene: ArchiveScene | undefined;
 let viewer: ModelViewer | undefined;
@@ -102,6 +110,7 @@ const eventOptions = { signal: pageEvents.signal };
 let pwaTimer: ReturnType<typeof setTimeout> | undefined;
 const lifecycle = new PageLifecycle(frame, () => {
   ready = false; started = false;
+  desktop?.dispose();
   pageEvents.abort(); clearTimeout(toastTimer); clearTimeout(pwaTimer);
   neteasePanel.cancel(); detailAssetsAbort?.abort(); playbackAssetsAbort?.abort(); setMusicCoverLoader();
   modalTransition.dispose(); detailTransition.dispose(); tabTransition.cancel();
@@ -293,6 +302,7 @@ function closeModal(after?: () => void) {
   }); audio.play('page-close');
 }
 function importModal() {
+  if (desktop) { openModal('import', '归档你的音乐', '<p class="panel-intro">选择音乐文件或整个文件夹，也可以把文件或文件夹拖入窗口。保存文件位置，音频保留在原目录。</p><div class="import-options"><button data-action="choose-files"><strong>选择音乐与 LRC ↗</strong></button><button data-action="choose-folder"><strong>扫描音乐文件夹 ↗</strong></button></div><p class="help-note">文件移动或磁盘离线时保留音乐索引，重新关联原文件即可恢复。迁移来的歌曲也可以通过重新选择原目录恢复。</p>'); return; }
   openModal('import', '归档你的音乐', `<p class="panel-intro">选择音乐文件或整个文件夹，也可以把文件拖入窗口。音频在本机读取。</p><div class="import-options"><button data-action="choose-files"><span>01 / FILES</span><strong>选择音乐文件 ↗</strong><small>支持同时选择歌曲和 LRC</small></button><button data-action="choose-folder"><span>02 / DIRECTORY</span><strong>导入音乐文件夹 ↗</strong><small>扫描子目录，记住文件位置</small></button></div><p class="help-note">Chrome / Edge 可保存文件访问句柄；重新打开时可能需要恢复读取权限。普通文件选择和拖入文件在不支持句柄的浏览器中仅本次打开有效。</p><button data-action="choose-temporary">兼容导入（本次打开） ↗</button>`);
 }
 function searchModal() {
@@ -325,6 +335,13 @@ function queueModal() {
 function settingsModal() {
   const p = prefs();
   openModal('settings', '系统设置', settingsContent(p));
+}
+async function downloadBackup(value: unknown, name = 'rhine-music-backup') {
+  const json = JSON.stringify(value), filename = `${name}-${new Date().toISOString().slice(0, 10)}.json`;
+  if (desktop) { await desktop.saveBackup(json, filename); return; }
+  const url = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
+  const link = document.createElement('a'); link.href = url; link.download = filename; link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function updatePlayer() {
@@ -367,12 +384,25 @@ async function runAction(button: HTMLElement) {
   if (action === 'import') { importModal(); return; }
   if (action === 'search') { searchModal(); return; }
   if (action === 'settings') { settingsModal(); return; }
+  if (action === 'backup-export') { player.capturePosition(); await downloadBackup(await exportBackup(library.snapshot)); return; }
+  if (action === 'backup-previous') { const value = await library.previousImportBackup(); if (value) await downloadBackup(value, 'rhine-music-before-import'); else tell('尚无导入前的资料备份'); return; }
+  if (action === 'backup-import') { $('#backup-input').click(); return; }
+  if (action === 'backup-apply' && pendingBackup) {
+    if (library.importing) throw new Error('请等待音乐导入完成后再迁移资料');
+    player.capturePosition(); const previous = await exportBackup(library.snapshot);
+    await library.protectImport(previous);
+    const merged = mergeBackup(library.snapshot, pendingBackup, $<HTMLInputElement>('#backup-overwrite').checked);
+    player.stop(); await library.restoreBackup(merged); pendingBackup = undefined;
+    player.setVolume(library.snapshot.playback.volume); applyPreferences(true);
+    await desktop?.setCloseToTray(prefs().closeToTray !== false);
+    await player.restore(); closeModal(); tell('资料已合并，队列保持暂停。本地歌曲请重新选择原目录关联。'); return;
+  }
   if (action === 'card-style') { prefs().cardStyle = prefs().cardStyle === 'cover' ? 'original' : 'cover'; applyPreferences(); tell(prefs().cardStyle === 'cover' ? '已切换封面卡片' : '已切换原双环内构'); return; }
   if (action === 'playlists') { playlistsModal(); return; }
   if (action === 'queue') { queueModal(); return; }
-  if (action === 'choose-files') { if (!(window as Window & { showOpenFilePicker?: unknown }).showOpenFilePicker) $('#file-input').click(); else { closeModal(); await library.chooseFiles(); } return; }
+  if (action === 'choose-files') { if (!desktop && !(window as Window & { showOpenFilePicker?: unknown }).showOpenFilePicker) $('#file-input').click(); else { closeModal(); await library.chooseFiles(); } return; }
   if (action === 'choose-temporary') { $('#file-input').click(); return; }
-  if (action === 'choose-folder') { if (!(window as Window & { showDirectoryPicker?: unknown }).showDirectoryPicker) $('#folder-input').click(); else { closeModal(); await library.chooseDirectory(); } return; }
+  if (action === 'choose-folder') { if (!desktop && !(window as Window & { showDirectoryPicker?: unknown }).showDirectoryPicker) $('#folder-input').click(); else { closeModal(); await library.chooseDirectory(); } return; }
   if (action === 'cancel-import') { library.cancelImport(); return; }
   if (action === 'albums' || action === 'lists') { prefs().collectionMode = action === 'albums' ? 'albums' : 'playlists'; if (mode === 'detail') setMode('archive'); syncCatalog(); library.scheduleSave(); return; }
   if (action === 'open') { openTrack(); return; }
@@ -387,10 +417,11 @@ async function runAction(button: HTMLElement) {
   if (action === 'favorite') { const track = selectedTrack(); if (track) library.favorite(track.id); return; }
   if (action === 'enqueue') { const track = selectedTrack(); if (track) { player.enqueue(track.id); tell('已加入播放队列'); } return; }
   if (action === 'add-playlist') { if (selectedTrack()) addPlaylistModal(selectedTrack()!.id); return; }
-  if (action === 'attach-lyrics') { lyricsTarget = selectedTrack()?.id; $('#lyrics-input').click(); return; }
+  if (action === 'attach-lyrics') { lyricsTarget = selectedTrack()?.id; if (desktop) { const text = await desktop.chooseLyrics(); if (text !== undefined && lyricsTarget) { library.setLyrics(lyricsTarget, text); renderDetail(); } } else $('#lyrics-input').click(); return; }
   if (action === 'restore-access') { const track = selectedTrack(); if (track) tell(await library.restoreAccess(track) ? '文件读取访问已恢复' : '访问未恢复，请重新关联文件'); return; }
   if (action === 'relink') {
     relinkTarget = selectedTrack()?.id; if (!relinkTarget) return;
+    if (desktop) { const items = await desktop.files.choose(false); const item = items.find(item => !/\.lrc$/i.test(item.file.name)); if (item) { await library.relinkDesktop(relinkTarget, item); renderDetail(); tell('文件已重新关联'); } return; }
     const picker = (window as Window & { showOpenFilePicker?: (options: object) => Promise<FileSystemFileHandle[]> }).showOpenFilePicker;
     if (picker) { const [handle] = await picker({ multiple: false }); await library.relink(relinkTarget, await handle.getFile(), handle); renderDetail(); tell('文件已重新关联'); } else $('#relink-input').click(); return;
   }
@@ -457,7 +488,9 @@ document.addEventListener('change', event => {
     const preference = input.dataset.preference as keyof ReturnType<typeof prefs>;
     (prefs() as unknown as Record<string, unknown>)[preference] = input.type === 'checkbox' ? input.checked : input.type === 'range' ? Number(input.value) : input.value;
     applyPreferences(); tell('设置已保存');
+    if (preference === 'closeToTray') void desktop?.setCloseToTray(prefs().closeToTray !== false);
   }
+  if (input.id === 'remember-login') library.netease.setRememberLogin(input.checked);
   if (input.id === 'quality-preset' && Object.hasOwn(qualityPresets, input.value)) {
     prefs().quality = input.value as QualityPreset; prefs().rendering = { ...qualityPresets[prefs().quality] }; applyPreferences();
   } else if (input.dataset.quality) {
@@ -495,6 +528,14 @@ $<HTMLInputElement>('#file-input').addEventListener('change', () => inputImport(
 $<HTMLInputElement>('#folder-input').addEventListener('change', () => inputImport($('#folder-input')));
 $<HTMLInputElement>('#lyrics-input').addEventListener('change', async () => { const input = $<HTMLInputElement>('#lyrics-input'), file = input.files?.[0]; input.value = ''; if (file && lyricsTarget) { library.setLyrics(lyricsTarget, await file.text()); if (selectedTrack()?.id === lyricsTarget && mode === 'detail') renderDetail(); tell('歌词已关联'); } });
 $<HTMLInputElement>('#relink-input').addEventListener('change', async () => { const input = $<HTMLInputElement>('#relink-input'), file = input.files?.[0]; input.value = ''; if (file && relinkTarget) { await library.relink(relinkTarget, file); if (mode === 'detail') renderDetail(); tell('文件已重新关联'); } });
+$<HTMLInputElement>('#backup-input').addEventListener('change', () => {
+  const input = $<HTMLInputElement>('#backup-input'), file = input.files?.[0]; input.value = ''; if (!file) return;
+  void (async () => {
+    if (file.size > 200 * 1024 * 1024) throw new Error('备份文件超过 200 MB，请分批迁移');
+    pendingBackup = readBackup(JSON.parse(await file.text()));
+    openModal('settings', '导入音乐资料', `<p class="panel-intro">将合并 ${pendingBackup.tracks.length} 首歌曲与 ${pendingBackup.playlists.length} 个歌单。同 ID 更新，收藏合并，队列恢复后保持暂停。</p><p class="help-note">导入前自动保存当前资料，可在设置中导出恢复。音频和登录保持独立；本地文件需要重新关联。</p><label class="check-setting"><input id="backup-overwrite" type="checkbox">同时覆盖当前界面与播放设置</label><button class="primary-action" data-action="backup-apply">确认合并资料 ↓</button>`);
+  })().catch(error => { pendingBackup = undefined; tell(error.message); });
+}, eventOptions);
 document.addEventListener('dragover', event => { if (event.dataTransfer?.types.includes('Files')) { event.preventDefault(); document.documentElement.dataset.musicDrop = 'true'; } }, eventOptions);
 document.addEventListener('dragleave', event => { if (!event.relatedTarget) delete document.documentElement.dataset.musicDrop; }, eventOptions);
 document.addEventListener('drop', event => {
@@ -535,18 +576,18 @@ library.addEventListener('progress', event => {
 library.addEventListener('importend', () => { $('#import-progress').hidden = true; tell(`音乐库已更新，共 ${library.tracks.length} 首歌曲`); });
 window.addEventListener('resize', fit, eventOptions); window.visualViewport?.addEventListener('resize', fit, eventOptions);
 document.addEventListener('visibilitychange', () => {
-  lifecycle.setHidden(document.hidden); lastFrame = performance.now();
+  lifecycle.setHidden(document.hidden || desktopHidden); lastFrame = performance.now();
   if (document.hidden && ready) { if (player?.capturePosition()) library.scheduleSave(); void library.flush(); }
 }, eventOptions);
 window.addEventListener('pagehide', event => {
   if (event.persisted) { player?.pause(); if (ready) void library.flush(); }
   lifecycle.pageHide(event.persisted);
 }, eventOptions);
-window.addEventListener('pageshow', () => { lastFrame = performance.now(); lifecycle.setHidden(document.hidden); }, eventOptions);
+window.addEventListener('pageshow', () => { lastFrame = performance.now(); lifecycle.setHidden(document.hidden || desktopHidden); }, eventOptions);
 document.fonts.addEventListener('loadingdone', () => documentReveal.refresh(), eventOptions);
 
 function frame(ms: number) {
-  if (!started || lifecycle.closed || document.hidden) { lastFrame = ms; return; }
+  if (!started || lifecycle.closed || document.hidden || desktopHidden) { lastFrame = ms; return; }
   const time = ms / 1000, dt = Math.min(.1, Math.max(0, (ms - lastFrame) / 1000)); lastFrame = ms;
   if (Math.floor(time) !== clockSecond) { clockSecond = Math.floor(time); clock(new Date(), !prefs().reduced); }
   let cinema: { reveal: number; lift: number; zoom: number; time: number } | undefined;
@@ -573,9 +614,22 @@ function frame(ms: number) {
   if (scene) inspection.render(scene.decryptionFrame, (x, y) => scene!.projectCard(x, y), !!cinema, !prefs().reduced);
 }
 async function initialize() {
+  if (desktop) await desktop.attach({
+    player: () => player,
+    hidden: hidden => { desktopHidden = hidden; lifecycle.setHidden(hidden || document.hidden); lastFrame = performance.now(); if (hidden && player?.capturePosition()) { library.scheduleSave(); void library.flush(); } },
+    quit: async () => { player?.capturePosition(); library.scheduleSave(); await library.flush(true); await library.netease.flushLogin(); lifecycle.dispose(); },
+    drop: async items => { if (ready) { closeModal(); await library.importItems(items); } },
+    tell,
+  });
   try { await library.initialize(); } catch (error) { tell(`本地索引暂未恢复：${error instanceof Error ? error.message : error}`); }
   if (lifecycle.closed) return;
-  player = new MusicPlayer(library.snapshot.playback, library.provider, id => library.track(id));
+  player = new MusicPlayer(library.snapshot.playback, library.provider, id => library.track(id), new Audio(), !desktop);
+  if (desktop) {
+    await desktop.setCloseToTray(prefs().closeToTray !== false);
+    player.addEventListener('change', () => desktop.syncMedia(player, true), eventOptions);
+    player.addEventListener('time', () => desktop.syncMedia(player), eventOptions);
+  }
+  library.netease.addEventListener('credential-error', event => tell((event as CustomEvent<string>).detail), eventOptions);
   player.addEventListener('change', updatePlayer); player.addEventListener('time', updateTime); player.addEventListener('persist', () => library.scheduleSave()); player.addEventListener('error', event => tell((event as CustomEvent<string>).detail));
   syncCatalog();
   try { const loadingScene = new ArchiveScene($('#three-scene')); scene = loadingScene; await loadingScene.load(); if (lifecycle.closed) return; loadingScene.refreshCatalog(selected); }
@@ -597,8 +651,8 @@ async function initialize() {
     $('#loading').remove(); $('#stage').inert = false; audio.releaseEntry(); audio.restartBoot();
     bootStart = performance.now() / 1000 - 1.76; setMode(full ? 'boot' : 'archive');
     if (!full) { scene?.revealImmediately(); if (!prefs().reduced) $('#viewport').animate([{ opacity: 0 }, { opacity: 1 }], { duration: 600, easing: 'ease-out' }); }
-    lifecycle.setHidden(document.hidden); lifecycle.start();
-    void player.restore(); pwaTimer = setTimeout(() => { if (!lifecycle.closed) void initPwa(tell); }, 1500);
+    lifecycle.setHidden(document.hidden || desktopHidden); lifecycle.start();
+    void player.restore(); if (!desktop) pwaTimer = setTimeout(() => { if (!lifecycle.closed) void initPwa(tell); }, 1500);
   };
   const full = !prefs().reduced && (prefs().intro === 'always' || prefs().intro === 'first' && !prefs().seenIntro);
   if (full && prefs().sound) { const gate = new StartupGate({ root: $('#loading'), unlock: () => audio.unlock(), cancel: () => audio.cancelEntry(), start: complete }); gate.ready(); }

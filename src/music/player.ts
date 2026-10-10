@@ -30,8 +30,9 @@ export class MusicPlayer extends EventTarget {
   private failedEntries = new Set<string>();
   private loadedPosition = 0;
   private bandValues = { low: 0, mid: 0, high: 0, activity: 0 };
-  constructor(state: PlaybackState, provider: MusicProvider, findTrack: (id: string) => Track | undefined, audio = new Audio()) {
-    super(); this.state = state; this.provider = provider; this.findTrack = findTrack; this.audio = audio;
+  private browserMediaSession: boolean;
+  constructor(state: PlaybackState, provider: MusicProvider, findTrack: (id: string) => Track | undefined, audio = new Audio(), browserMediaSession = true) {
+    super(); this.browserMediaSession = browserMediaSession; this.state = state; this.provider = provider; this.findTrack = findTrack; this.audio = audio;
     audio.preload = 'metadata'; audio.volume = state.volume;
     audio.addEventListener('timeupdate', () => {
       if (this.loading || this.disposed) return;
@@ -53,7 +54,7 @@ export class MusicPlayer extends EventTarget {
       if (shouldContinue) void this.advanceQueue(1, true, true);
       else this.notify(true);
     }, { signal: this.events.signal });
-    if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
+    if (this.browserMediaSession && typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
       const actions: Partial<Record<MediaSessionAction, MediaSessionActionHandler>> = {
         play: () => { void this.resume(); }, pause: () => this.pause(),
         previoustrack: () => { void this.advance(-1); }, nexttrack: () => { void this.advance(1); },
@@ -100,7 +101,7 @@ export class MusicPlayer extends EventTarget {
     if (this.disposed) return;
     this.dispatchEvent(new Event('change'));
     if (persist) this.dispatchEvent(new Event('persist'));
-    if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) navigator.mediaSession.playbackState = this.playing ? 'playing' : 'paused';
+    if (this.browserMediaSession && typeof navigator !== 'undefined' && 'mediaSession' in navigator) navigator.mediaSession.playbackState = this.playing ? 'playing' : 'paused';
   }
   private unlockAudio() {
     if (this.disposed) return;
@@ -285,13 +286,13 @@ export class MusicPlayer extends EventTarget {
     if (track) this.syncMediaMetadata(track);
   }
   private syncMediaMetadata(track: Track) {
-    if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
+    if (!this.browserMediaSession || typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
     if (this.mediaCover) URL.revokeObjectURL(this.mediaCover);
     this.mediaCover = track.cover ? URL.createObjectURL(track.cover) : undefined;
     navigator.mediaSession.metadata = new MediaMetadata({ title: track.title, artist: track.artist, album: track.album, artwork: this.mediaCover ? [{ src: this.mediaCover, type: track.cover!.type }] : [] });
   }
   private syncMediaPosition() {
-    if (typeof navigator === 'undefined' || !('mediaSession' in navigator) || !navigator.mediaSession.setPositionState || !this.duration) return;
+    if (!this.browserMediaSession || typeof navigator === 'undefined' || !('mediaSession' in navigator) || !navigator.mediaSession.setPositionState || !this.duration) return;
     try { navigator.mediaSession.setPositionState({ duration: this.duration, playbackRate: this.audio.playbackRate, position: Math.min(this.duration, this.audio.currentTime) }); } catch { /* browser capability */ }
   }
   bands(dt: number) {
@@ -323,7 +324,7 @@ export class MusicPlayer extends EventTarget {
     if (this.context && this.context.state !== 'closed') void this.context.close().catch(() => {});
     if (this.mediaCover) URL.revokeObjectURL(this.mediaCover);
     this.mediaCover = undefined;
-    if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
+    if (this.browserMediaSession && typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
       for (const action of this.mediaActions) try { navigator.mediaSession.setActionHandler(action, null); } catch { /* optional action */ }
       navigator.mediaSession.metadata = null; navigator.mediaSession.playbackState = 'none';
     }

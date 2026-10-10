@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-window",
+  "description": "Local music window; no remote pages receive native access",
+  "windows": ["main"],
+  "permissions": [
+    "core:default", "core:window:allow-start-dragging", "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize", "core:window:allow-close",
+    { "identifier": "opener:allow-open-url", "allow": [{ "url": "https://github.com/**" }, { "url": "https://wy-yapi-enhanced.vercel.app/**" }] },
+    { "identifier": "http:default", "allow": [{ "url": "https://wy-yapi-enhanced.vercel.app/**" }, { "url": "https://*.music.126.net/**" }] }
+  ]
+}

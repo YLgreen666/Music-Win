@@ -20,6 +20,7 @@ import { CoverSlots } from '../src/music/cover-slots.ts';
 import { MusicCoverLayer } from '../src/music/cover-layer.ts';
 import { ResourcePool } from '../src/resource-pool.ts';
 import { copyAtlasTile } from '../src/music/atlas-pixels.ts';
+import { exportBackup, readBackup, mergeBackup } from '../src/music/backup.ts';
 
 test('partial atlas upload preserves row orientation and neighboring tile pixels', () => {
   const pixels = new Uint8Array(4 * 4 * 4).fill(17), source = new Uint8ClampedArray([1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255]);
@@ -197,6 +198,66 @@ class FakeAudio extends EventTarget {
 }
 const state = () => ({ queue: [], currentEntryId: null, position: 0, volume: .75, mode: 'sequence' });
 const tick = () => new Promise(resolve => setImmediate(resolve));
+
+test('portable backup retains music relationships and rejects injected file access and secrets', async () => {
+  const db = new MusicDatabase(), snapshot = await db.load();
+  snapshot.tracks = [track('native', { handle: { token: 'not exported' }, desktopFile: { path: 'C:\\private\\song.wav', size: 100, modified: 1 }, cover: new Blob(['picture'], { type: 'image/png' }), lyrics: '[00:01]test', cookie: 'never exported' }), neteaseTrack({ id: 1, name: 'Online' })];
+  snapshot.playlists = [{ id: 'p', name: 'Mixed', kind: 'playlist', trackIds: ['native', 'netease:1'] }]; snapshot.favorites = ['native'];
+  snapshot.playback = { ...state(), queue: [{ id: 'q', trackId: 'native' }], currentEntryId: 'q', position: 12 };
+  const backup = await exportBackup(snapshot), serialized = JSON.stringify(backup);
+  assert.ok(!serialized.includes('never exported')); assert.ok(!serialized.includes('not exported')); assert.ok(!serialized.includes('private'));
+  backup.tracks[0].desktopFile = { path: 'C:\\secret.txt' }; backup.tracks[0].handle = {}; backup.cookie = 'injected';
+  const restored = readBackup(backup); assert.equal(restored.tracks[0].handle, undefined); assert.equal(restored.tracks[0].desktopFile, undefined);
+  assert.equal(restored.tracks[0].availability, 'missing'); assert.equal(await restored.tracks[0].cover.text(), 'picture');
+  assert.equal(restored.playback.position, 12); assert.deepEqual(restored.playlists[0].trackIds, ['native', 'netease:1']);
+  await db.saveImportBackup(backup); assert.equal((await db.loadImportBackup()).version, 1); db.close();
+  const duplicates = structuredClone(backup); duplicates.tracks.push(duplicates.tracks[0]); assert.throws(() => readBackup(duplicates), /ID/);
+  assert.throws(() => readBackup({ ...backup, version: 2 }), /版本/);
+});
+
+test('backup merge preserves existing access, defaults to current settings and merges by stable ID', async () => {
+  const db = new MusicDatabase(), current = await db.load(), incoming = await db.load(); db.close();
+  current.tracks = [track('a', { desktopFile: { path: 'C:\\Music\\a.wav', size: 100, modified: 1 } })]; current.preferences.theme = 'dark'; current.favorites = ['a'];
+  incoming.tracks = [track('a', { title: 'Updated', availability: 'missing' }), track('b')]; incoming.preferences.theme = 'light'; incoming.favorites = ['b'];
+  const merged = mergeBackup(current, incoming);
+  assert.equal(merged.tracks.length, 2); assert.equal(merged.tracks[0].title, 'Updated'); assert.ok(merged.tracks[0].desktopFile); assert.equal(merged.tracks[0].availability, 'ready');
+  assert.equal(merged.preferences.theme, 'dark'); assert.deepEqual(merged.favorites, ['a', 'b']); assert.equal(mergeBackup(current, incoming, true).preferences.theme, 'light');
+});
+
+test('desktop adapter restores migrated IDs, updates native stats and resolves streams without audio IPC', async () => {
+  const files = new BrowserFileAccess(); files.parse = async () => ({ duration: 25 }); files.resolveMedia = async track => ({ url: `asset://${track.id}`, release() {} });
+  const library = new MusicLibrary({ files });
+  library.snapshot.tracks = [track('migrated', { fileName: 'a.wav', relativePath: 'Music/a.wav', availability: 'missing' })];
+  const item = { file: new File([], 'a.wav'), relativePath: 'Music/a.wav', desktopFile: { path: 'C:\\Music\\a.wav', size: 100, modified: 8 } };
+  await library.importItems([item]); await library.importItems([item]); assert.equal(library.tracks.length, 1); assert.equal(library.tracks[0].id, 'migrated');
+  assert.equal(library.tracks[0].size, 100); assert.equal(library.tracks[0].modified, 8); assert.equal(files.temporary.size, 0);
+  assert.equal((await library.provider.resolveMedia(library.tracks[0])).url, 'asset://migrated');
+  await library.relinkDesktop('migrated', { ...item, desktopFile: { ...item.desktopFile, path: 'D:\\a.wav' } });
+  assert.equal(library.track('migrated').desktopFile.path, 'D:\\a.wav'); library.dispose();
+});
+
+test('desktop cancellation discards the active metadata result and keeps completed songs', async () => {
+  const files = new BrowserFileAccess(); let count = 0;
+  const library = new MusicLibrary({ files }); files.parse = async () => { if (++count === 2) library.cancelImport(); return {}; };
+  await library.importItems(['a', 'b', 'c'].map(name => ({ file: new File([], `${name}.wav`), relativePath: `${name}.wav`, desktopFile: { path: `C:\\${name}.wav`, size: 100, modified: 1 } })));
+  assert.equal(library.tracks.length, 1); assert.equal(library.importing, false); library.dispose();
+});
+
+test('desktop credentials use an injected vault, serialize writes and clear remembered login', async () => {
+  const writes = [], storage = sessionStorageFake();
+  const session = { cookie: 'private credential', uid: 9, nickname: 'Test' };
+  const vault = { load: async () => JSON.stringify(session), save: async value => { await tick(); writes.push(value); } };
+  const provider = new NeteaseMusicProvider(undefined, async () => Response.json({ code: 200, data: { account: { id: 9 }, profile: { nickname: 'Test' } } }), storage, vault);
+  assert.equal(await provider.restoreSession(), true); provider.setRememberLogin(false); provider.disconnect(); await provider.flushLogin();
+  assert.equal(JSON.parse(writes[0]).uid, 9); assert.equal(writes.at(-1), null); assert.equal(storage.getItem(`rhine-netease-session:${provider.endpoint}`), null); provider.dispose();
+});
+
+test('desktop player does not register or overwrite browser media handlers', () => {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator'), calls = [];
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { mediaSession: { setActionHandler: (...args) => calls.push(args) } } });
+  try { const player = new MusicPlayer(state(), { resolveMedia() {} }, () => undefined, new FakeAudio(), false); player.dispose(); assert.deepEqual(calls, []); }
+  finally { if (descriptor) Object.defineProperty(globalThis, 'navigator', descriptor); else delete globalThis.navigator; }
+});
 
 const sessionStorageFake = () => { const items = new Map(); return { getItem: key => items.get(key) || null, setItem: (key, value) => items.set(key, value), removeItem: key => items.delete(key), items }; };
 const jsonResponse = body => new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } });

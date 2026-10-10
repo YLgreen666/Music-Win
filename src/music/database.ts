@@ -35,4 +35,20 @@ export class MusicDatabase {
       transaction.onabort = () => reject(transaction.error ?? new Error('音乐库保存被中断'));
     });
   }
+  async saveImportBackup(value: unknown) {
+    if (!this.db) await this.open();
+    await new Promise<void>((resolve, reject) => {
+      const transaction = this.db!.transaction('state', 'readwrite');
+      transaction.objectStore('state').put(value, 'before-import');
+      transaction.oncomplete = () => resolve(); transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error);
+    });
+  }
+  async loadImportBackup(): Promise<unknown> {
+    if (!this.db) await this.open();
+    return new Promise((resolve, reject) => {
+      const request = this.db!.transaction('state').objectStore('state').get('before-import');
+      request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
+    });
+  }
 }
